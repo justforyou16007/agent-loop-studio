@@ -33,10 +33,15 @@ export interface ProjectInfo {
 
 const NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
-/** The reference projects of a library checkout: `references/<name>/reference.json`. */
+/** The reference projects of a library checkout (or of the framework it carries): `references/<name>/reference.json`. */
 export function listReferences(library: string | null): ReferenceInfo[] {
-  const dir = library ? path.join(library, "references") : "";
-  if (!dir || !fs.existsSync(dir)) return [];
+  const dir = library
+    ? [
+        path.join(library, "references"),
+        path.join(library, "agent-loop-studio", "references"),
+      ].find((candidate) => fs.existsSync(candidate))
+    : undefined;
+  if (!dir) return [];
   const out: ReferenceInfo[] = [];
   for (const name of fs.readdirSync(dir).sort()) {
     try {
@@ -102,7 +107,11 @@ export function applyReference(
   const root = path.resolve(projectRoot);
   const reference = listReferences(installedLibrary(root)).find((entry) => entry.name === name);
   if (!reference) failA1("NOT_FOUND", `the library has no reference project ${name}`);
-  const dir = path.join(installedLibrary(root)!, "references", name);
+  const library = installedLibrary(root)!;
+  const dir = [
+    path.join(library, "references", name),
+    path.join(library, "agent-loop-studio", "references", name),
+  ].find((candidate) => fs.existsSync(candidate))!;
   const added: string[] = [];
   for (const [from, to, extension] of [
     ["loops", "loops", ".md"],

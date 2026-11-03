@@ -71,6 +71,23 @@ export function installedLibrary(root: string): string | null {
   return typeof library === "string" && library ? library : null;
 }
 
+/**
+ * Where the project's library lives: the checkout it was installed from and, in a
+ * project package's checkout, the framework's and the community's libraries it
+ * carries as submodules (`agent-loop-studio/`, `agent-loop-community/`). Each
+ * holds `library/loops/<side>/` and `library/roles/<side>/`; the first holding a
+ * file wins.
+ */
+export function libraryRoots(root: string): string[] {
+  const library = installedLibrary(root);
+  if (!library) return [];
+  return [
+    library,
+    path.join(library, "agent-loop-studio"),
+    path.join(library, "agent-loop-community"),
+  ].filter((candidate) => fs.existsSync(path.join(candidate, "library")));
+}
+
 export function skillsDir(root: string): string {
   return path.join(path.resolve(root), ...SKILLS_DIR.split("/"));
 }

@@ -9,7 +9,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { entryRoleOf, installedLibrary, sidesOf } from "./installation.js";
+import { entryRoleOf, libraryRoots, sidesOf } from "./installation.js";
 import {
   frontmatter,
   loopDefinitionPath,
@@ -25,19 +25,19 @@ import { failA1 } from "./validate.js";
 
 const LOOP_NAME = /^[a-z0-9][a-z0-9-]*$/;
 
-/** Where the library keeps a loop or role of a side this project may use. */
+/** Where the library keeps a loop or role of a side this project may use: the project's side first. */
 function libraryFile(
   root: string,
   kind: "loops" | "roles",
   name: string,
   extension: string,
 ): string | null {
-  const library = installedLibrary(root);
-  if (!library) return null;
-  for (const dir of sidesOf(root)) {
-    const file = path.join(library, "library", kind, dir, `${name}${extension}`);
-    if (fs.existsSync(file)) return file;
-  }
+  const sides = sidesOf(root);
+  for (const dir of [...sides.slice(1), sides[0]!])
+    for (const library of libraryRoots(root)) {
+      const file = path.join(library, "library", kind, dir, `${name}${extension}`);
+      if (fs.existsSync(file)) return file;
+    }
   return null;
 }
 

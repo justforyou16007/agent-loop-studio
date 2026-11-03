@@ -15,7 +15,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createCli, runCli } from "../lib/cli.js";
-import { installedLibrary, installedRole } from "./installation.js";
+import { installedLibrary, installedRole, libraryRoots } from "./installation.js";
 import { checkLoop, splitScript, type LoopReport } from "./loop-check.js";
 import { client } from "./loop-view-client.js";
 import {
@@ -223,31 +223,34 @@ interface LoopFile {
 }
 
 /** The library the project was installed from, by side, for loops and roles the project lacks. */
-function libraryFiles(library: string | null, side: string) {
+function libraryFiles(roots: string[], side: string) {
   const loops: LoopFile[] = [];
   const roles: RoleFile[] = [];
-  if (!library) return { loops, roles };
-  // The framework's files and the project's own side's; without a profile, every side the library has.
-  const present = fs.existsSync(path.join(library, "library", "loops"))
-    ? fs.readdirSync(path.join(library, "library", "loops"))
-    : ["framework"];
-  const sides = present.includes(side) ? ["framework", side] : present;
-  for (const dir of sides) {
-    const loopDir = path.join(library, "library", "loops", dir);
-    for (const file of markdownFiles(loopDir))
-      loops.push({
-        name: file.slice(0, -3),
-        source: "library",
-        definition: readText(path.join(loopDir, file)) ?? "",
-        script: readText(path.join(loopDir, `${file.slice(0, -3)}.js`)),
-      });
-    const roleDir = path.join(library, "library", "roles", dir);
-    for (const file of markdownFiles(roleDir))
-      roles.push({
-        name: file.slice(0, -3),
-        source: "library",
-        text: readText(path.join(roleDir, file)) ?? "",
-      });
+  for (const library of roots) {
+    // The framework's files and the project's own side's; without a profile, every side the library has.
+    const present = fs.existsSync(path.join(library, "library", "loops"))
+      ? fs.readdirSync(path.join(library, "library", "loops"))
+      : ["framework"];
+    const sides = present.includes(side) ? ["framework", side] : present;
+    for (const dir of sides) {
+      const loopDir = path.join(library, "library", "loops", dir);
+      for (const file of markdownFiles(loopDir))
+        if (!loops.some((known) => known.name === file.slice(0, -3)))
+          loops.push({
+            name: file.slice(0, -3),
+            source: "library",
+            definition: readText(path.join(loopDir, file)) ?? "",
+            script: readText(path.join(loopDir, `${file.slice(0, -3)}.js`)),
+          });
+      const roleDir = path.join(library, "library", "roles", dir);
+      for (const file of markdownFiles(roleDir))
+        if (!roles.some((known) => known.name === file.slice(0, -3)))
+          roles.push({
+            name: file.slice(0, -3),
+            source: "library",
+            text: readText(path.join(roleDir, file)) ?? "",
+          });
+    }
   }
   return { loops, roles };
 }
@@ -414,7 +417,7 @@ export async function collectView(projectRoot: string, live = false): Promise<Vi
       ? { loop: chosenFile.loop, params: chosenFile.params }
       : null;
 
-  const extra = libraryFiles(library, side);
+  const extra = libraryFiles(library ? libraryRoots(root) : [], side);
   const roleFiles: RoleFile[] = markdownFiles(rolesDir(root)).map((file) => ({
     name: file.slice(0, -3),
     source: "project",
@@ -598,11 +601,12 @@ export function fingerprint(root: string): string {
     path.join(root, dir),
   );
   if (library)
-    for (const kind of ["loops", "roles"])
-      for (const side of fs.existsSync(path.join(library, "library", kind))
-        ? fs.readdirSync(path.join(library, "library", kind))
-        : [])
-        dirs.push(path.join(library, "library", kind, side));
+    for (const base of libraryRoots(root))
+      for (const kind of ["loops", "roles"]) {
+        const dir = path.join(base, "library", kind);
+        for (const side of fs.existsSync(dir) ? fs.readdirSync(dir) : [])
+          dirs.push(path.join(dir, side));
+      }
   const files = [
     selectedLoopPath(root),
     path.join(root, ".contrejour", "trajectories", "index.jsonl"),
