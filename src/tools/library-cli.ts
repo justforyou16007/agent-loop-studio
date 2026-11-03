@@ -1555,20 +1555,30 @@ function cli(): void {
     );
   program
     .command("record-check")
-    .description("Record the verdict of the project's own check on one plan of its contribution")
+    .description("Record the verdict of the project's own check on one plan of what would leave")
     .requiredOption("--project <dir>")
     .requiredOption("--digest <sha256>")
     .requiredOption("--verdict <verdict>", "pass or fail")
     .option("--finding <text...>", "where each problem is and what kind, without its content")
-    .action((options: { project: string; digest: string; verdict: string; finding?: string[] }) =>
-      action(() =>
-        recordCheck(
-          path.resolve(options.project),
-          options.digest,
-          options.verdict,
-          options.finding ?? [],
-        ),
-      )(),
+    // The digest already binds the plan's purpose; the option is accepted so every command takes it.
+    .option("--purpose <purpose>", PURPOSE_HELP)
+    .action(
+      (options: {
+        project: string;
+        digest: string;
+        verdict: string;
+        finding?: string[];
+        purpose?: string;
+      }) =>
+        action(() => {
+          purposeOf(options.purpose);
+          return recordCheck(
+            path.resolve(options.project),
+            options.digest,
+            options.verdict,
+            options.finding ?? [],
+          );
+        })(),
     );
   program
     .command("contribute")

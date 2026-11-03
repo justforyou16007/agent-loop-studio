@@ -39,7 +39,7 @@ The framework knows nothing about any one project. A package tells it what it ne
 - A side's **loops of the framework's names** take the framework's place in its projects. Two are made for that: `configure`, setup's project-specific step, and `contribution-check`, the project's own check of what leaves (the framework's puts the files to the owner).
 - `skills/shared-references/project-rules.md` holds the project's rules the framework's roles read: how its task loops are run, how its runs are identified and where their outcomes are, whether its trajectories hold what no role may contain (then `trajectory-optimizer` only proposes, and the owner accepts in `proposal-review`).
 
-Dependencies point one way: a project depends on a version of this framework and a version of the community library, as git submodules; neither depends on any project, and a community role never calls a project's helper.
+Dependencies point one way: a project depends on a version of this framework and a version of the community library, as git submodules; neither depends on any project. The community library's `framework` loops and roles use only the framework's; a side's may use what that side's package provides, which only a project of that side can check.
 
 ## The Studio
 
@@ -56,4 +56,4 @@ What a project learns leaves it in two ways, each a loop the owner runs when the
 - **Contributing** (`library-contribution`): the loops and roles the project made, the ones no library gave it, go to the community library, agent-loop-community, for other projects to use.
 - **Sending upstream** (`upstream-optimization`): the project's improvements to loops and roles a library gave it, above all the roles `trajectory-optimizer` fixed, go back to the library each came from: the framework's base loops and roles to agent-loop-studio, the community's to agent-loop-community, a package's own to that package. One pull request per library.
 
-`library-cli.js` keeps a baseline of every seeded file in `.contrejour/seeded/`, so an improvement holds only what the project changed, merged three ways with what its library changed meanwhile. It blocks keys, tokens, machine paths and hidden files, checks the result with the libraries laid together as a project receives them, runs the project's own check when it has one (`contribution-check`), and the owner approves exactly what leaves before any pull request is opened.
+`library-cli.js` keeps a baseline of every seeded file in `.contrejour/seeded/`, so an improvement holds only what the project changed, merged three ways with what its library changed meanwhile. It blocks keys, tokens and hidden files, warns about paths of this machine, checks the result with the libraries laid together as a project receives them, runs the project's own check when it has one (`contribution-check`), and the owner approves exactly what leaves before any pull request is opened.
