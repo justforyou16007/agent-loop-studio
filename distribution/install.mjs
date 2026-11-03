@@ -242,7 +242,8 @@ if (!values["dry-run"]) {
     ) + "\n",
   );
   fs.renameSync(temp, manifestFile);
-  // The hooks check, among other things, that every answer a session passes to a loop is the owner's own.
+  // Every session starts as the profile's entry role, the one that runs loops and relays the owner's
+  // answers; the hooks check, among other things, that every answer it passes to a loop is the owner's own.
   const hooks = spawnSync(
     process.execPath,
     [path.join(root, ".contrejour/dist/tools/project-cli.js"), "hooks", "--project", root],
@@ -250,7 +251,7 @@ if (!values["dry-run"]) {
   );
   if (hooks.status !== 0)
     throw new Error(
-      `Could not register Contrejour's hooks in .claude/settings.json: ${hooks.stderr || hooks.stdout}`,
+      `Could not write the hooks and the entry role in .claude/settings.json: ${hooks.stderr || hooks.stdout}`,
     );
 }
 console.log(

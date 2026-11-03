@@ -95,7 +95,6 @@ export function client(): void {
       search: "搜索流程或角色",
       kind_task: "主任务",
       "kind_on-request": "按需运行",
-      kind_setup: "安装配置",
       library_only: "流程库里有、本项目未装",
       roles: "角色",
       no_match: "没有匹配的流程或角色。",
@@ -156,7 +155,7 @@ export function client(): void {
       load_failed: "读取失败：",
       home_title: "这个项目的流程",
       home_task: "主任务流程",
-      home_none: "还没有通过 setup 选定主任务流程。",
+      home_none: "还没有选定主任务流程：在 Studio 里选一个。",
       home_side: "本项目是",
       home_library: "流程库",
       home_no_library: "安装时没有记录流程库",
@@ -172,7 +171,6 @@ export function client(): void {
       search: "Search loops and roles",
       kind_task: "Task",
       "kind_on-request": "On request",
-      kind_setup: "Setup",
       library_only: "In the library, not installed",
       roles: "Roles",
       no_match: "No loop or role matches.",
@@ -233,7 +231,7 @@ export function client(): void {
       load_failed: "Could not load: ",
       home_title: "This project's loops",
       home_task: "Task loop",
-      home_none: "No task loop has been chosen through setup yet.",
+      home_none: "No task loop has been chosen yet: choose one in the Studio.",
       home_side: "This project is the",
       home_library: "Library",
       home_no_library: "No library was recorded at installation",
@@ -246,7 +244,7 @@ export function client(): void {
     },
   };
   const TABS = ["steps", "parameters", "roles", "runs", "definition", "script", "check"];
-  const KINDS = ["task", "on-request", "setup"];
+  const KINDS = ["task", "on-request"];
 
   const app = document.getElementById("app") as HTMLElement;
   const embedded = document.getElementById("data");

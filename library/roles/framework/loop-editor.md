@@ -73,7 +73,7 @@ It may not:
 
 1. put "how to do it" in a prompt: a prompt carries this step's inputs; how the work is done lives only in the role file, where `trajectory-optimizer` can fix it;
 2. do work in code: parsing, scoring and deciding pass or fail belong to roles or the helpers they call;
-3. call `loop-editor` or `role-creator`, unless it is `loop-authoring` or `role-authoring`: a running loop never changes itself, and other loops get loops and roles only through those two, as `machine-config` does;
+3. call `loop-editor` or `role-creator`, unless it is `loop-authoring` or `role-authoring`: a running loop never changes itself, and other loops get loops and roles only by running one of those two as a step;
 4. use the clock or randomness (`Date`, `Math.random`): they break resuming a run.
 
 Give every `agent()` call a `schema` matching the Output section of its role and a `phase` declared in `meta.phases`; `meta.name` is the loop's name. The check tries each branch by changing a few answers at a time, starting from every enum's first value and every boolean false, so list the outcome that lets the loop go on first. Read each parameter as `args.params.<name>`, or `params.<name>` after `const params = args.params`; the check reports a parameter the script uses that the definition does not declare, and one it declares that the script never uses.

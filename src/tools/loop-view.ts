@@ -307,11 +307,11 @@ function runsByLoop(root: string, names: Map<string, string>): Map<string, RunVi
   );
 }
 
+/** The language the owner writes the task in: Chinese when task.md has Chinese in it, or when there is no task yet. */
 function projectLanguage(root: string): "zh" | "en" {
-  const draft = readJson(path.join(root, ".contrejour", "setup-draft.json"));
-  const configuration = isRecord(draft) && isRecord(draft.configuration) ? draft.configuration : {};
-  const project = isRecord(configuration.project) ? configuration.project : {};
-  return project.language === "en" ? "en" : "zh";
+  const task = readText(path.join(root, "task.md"));
+  if (task === null || !task.trim()) return "zh";
+  return /[\u4e00-\u9fff]/.test(task) ? "zh" : "en";
 }
 
 interface LoopContext {
@@ -619,7 +619,7 @@ export function fingerprint(root: string): string {
     selectedLoopPath(root),
     path.join(root, ".contrejour", "trajectories", "index.jsonl"),
     path.join(root, ".contrejour", "install.json"),
-    path.join(root, ".contrejour", "setup-draft.json"),
+    path.join(root, "task.md"),
   ];
   for (const dir of dirs)
     if (fs.existsSync(dir))
@@ -723,8 +723,8 @@ export async function serveLoops(
 }
 
 const STYLE = `
-:root{--bg:#f6f6f3;--surface:#fff;--sunken:#f0f0ec;--border:#e2e2dc;--text:#1d2125;--muted:#5f6670;--faint:#8b929b;--accent:#2457c5;--accent-soft:#e8eefb;--task:#0f766e;--task-soft:#e1f3f1;--setup:#6d3fc0;--setup-soft:#efe8fb;--request:#475569;--request-soft:#edf0f4;--ok:#1a7f37;--warn:#9a6700;--warn-soft:#fdf3d7;--bad:#c4271f;--bad-soft:#fde8e6;--shadow:0 1px 2px rgba(20,24,28,.06),0 1px 1px rgba(20,24,28,.04);--mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;--sans:system-ui,-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",sans-serif}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1114;--surface:#171a1f;--sunken:#1d2127;--border:#2a2f37;--text:#e7e9ec;--muted:#a2a9b3;--faint:#7c838d;--accent:#6c9cff;--accent-soft:#1c2740;--task:#3cc1b3;--task-soft:#12302d;--setup:#b08bf5;--setup-soft:#2a2140;--request:#a3b1c4;--request-soft:#232a33;--ok:#4cc26b;--warn:#e0b341;--warn-soft:#3a3016;--bad:#ff7b72;--bad-soft:#3b1d1b;--shadow:none}}
+:root{--bg:#f6f6f3;--surface:#fff;--sunken:#f0f0ec;--border:#e2e2dc;--text:#1d2125;--muted:#5f6670;--faint:#8b929b;--accent:#2457c5;--accent-soft:#e8eefb;--task:#0f766e;--task-soft:#e1f3f1;--loop:#6d3fc0;--loop-soft:#efe8fb;--request:#475569;--request-soft:#edf0f4;--ok:#1a7f37;--warn:#9a6700;--warn-soft:#fdf3d7;--bad:#c4271f;--bad-soft:#fde8e6;--shadow:0 1px 2px rgba(20,24,28,.06),0 1px 1px rgba(20,24,28,.04);--mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;--sans:system-ui,-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",sans-serif}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1114;--surface:#171a1f;--sunken:#1d2127;--border:#2a2f37;--text:#e7e9ec;--muted:#a2a9b3;--faint:#7c838d;--accent:#6c9cff;--accent-soft:#1c2740;--task:#3cc1b3;--task-soft:#12302d;--loop:#b08bf5;--loop-soft:#2a2140;--request:#a3b1c4;--request-soft:#232a33;--ok:#4cc26b;--warn:#e0b341;--warn-soft:#3a3016;--bad:#ff7b72;--bad-soft:#3b1d1b;--shadow:none}}
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
 a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
@@ -752,7 +752,7 @@ h1{font-size:22px;margin:0;font-family:var(--mono);font-weight:600}
 .title-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px}
 .lead{color:var(--muted);margin:8px 0 16px;max-width:80ch}
 .badge{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:550;padding:1px 8px;border-radius:999px;border:1px solid var(--border);color:var(--muted);background:var(--surface);white-space:nowrap}
-.badge.kind-task{color:var(--task);background:var(--task-soft);border-color:transparent}.badge.kind-setup{color:var(--setup);background:var(--setup-soft);border-color:transparent}.badge.kind-on-request{color:var(--request);background:var(--request-soft);border-color:transparent}
+.badge.kind-task{color:var(--task);background:var(--task-soft);border-color:transparent}.badge.kind-on-request{color:var(--request);background:var(--request-soft);border-color:transparent}
 .badge.ok{color:var(--ok)}.badge.stale{color:var(--warn);background:var(--warn-soft);border-color:transparent}.badge.bad{color:var(--bad);background:var(--bad-soft);border-color:transparent}
 .badge.chosen{color:var(--warn);background:var(--warn-soft);border-color:transparent}.badge.wait{color:var(--warn);background:var(--warn-soft);border-color:transparent}
 .pill{font-size:12.5px;padding:2px 10px;border-radius:999px;background:var(--task-soft);color:var(--task)}.pill.muted{background:var(--sunken);color:var(--muted)}
@@ -774,7 +774,7 @@ h1{font-size:22px;margin:0;font-family:var(--mono);font-weight:600}
 .card .text{color:var(--text);font-size:13.5px}.card .text p{margin:4px 0}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 2px}
 .chip{display:inline-block;font-family:var(--mono);font-size:12px;padding:0 8px;border-radius:6px;line-height:20px;white-space:nowrap}
-.chip.role{background:var(--accent-soft);color:var(--accent)}.chip.loop{border:1px solid var(--setup);color:var(--setup)}.chip.missing{background:var(--sunken);color:var(--faint);text-decoration:line-through}.chip .times{font-family:var(--sans);opacity:.75}
+.chip.role{background:var(--accent-soft);color:var(--accent)}.chip.loop{border:1px solid var(--loop);color:var(--loop)}.chip.missing{background:var(--sunken);color:var(--faint);text-decoration:line-through}.chip .times{font-family:var(--sans);opacity:.75}
 .flow-group{margin:4px 0 10px 46px;font-family:var(--mono);font-size:12px;color:var(--faint)}.flow-group span{border:1px dashed var(--border);border-radius:6px;padding:1px 8px}
 .flow-note{margin:0 0 12px 46px;color:var(--muted);font-size:13px}
 .extra{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-top:22px}

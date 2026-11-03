@@ -2,7 +2,7 @@
 
 Contrejour has three levels, and each does one kind of work:
 
-- **The session** — the role a Claude Code session runs as: a task manager, or a setup role during setup — starts loops and carries the owner's answers into them. It never calls a role itself and never decides anything for the owner.
+- **The session** — the role a Claude Code session runs as: the project's entry role, a task manager — starts loops and carries the owner's answers into them. It never calls a role itself and never decides anything for the owner.
 - **A loop** schedules roles: which role does each step, in what order, on what condition, how many times, and where it waits.
 - **A role** does one step, as its own file says, using helpers as its tools.
 

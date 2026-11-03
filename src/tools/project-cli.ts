@@ -11,7 +11,7 @@ import { entryRoleOf, installedRole } from "./installation.js";
 import { readSelectedLoop } from "./loops.js";
 import { useLoop } from "./project-loop.js";
 import { readManifest } from "./project-manifest.js";
-import { entryRole, registerHooks } from "./project-settings.js";
+import { entryRole, writeEntryRole } from "./project-settings.js";
 
 /** `name=value`: the value read as JSON when it is JSON (a number, true), else as text. */
 function parameter(text: string): [string, unknown] {
@@ -35,9 +35,13 @@ function cli(): void {
   const print = (value: unknown) => console.log(JSON.stringify(value, null, 2));
   program
     .command("hooks")
-    .description("Register the hooks in .claude/settings.json, keeping every other setting")
+    .description(
+      "Write what every session of this project starts with in .claude/settings.json: the hooks and the entry role, keeping every other setting",
+    )
     .requiredOption("--project <dir>")
-    .action((options: { project: string }) => print({ settings: registerHooks(options.project) }));
+    .action((options: { project: string }) =>
+      print({ settings: writeEntryRole(options.project, entryRoleOf(options.project)) }),
+    );
   program
     .command("use")
     .description(

@@ -4,7 +4,7 @@ description: Create or change a loop from the owner's description — find the l
 side: framework
 kind: on-request
 triggers: record-trajectory, guard-owner-answers
-check-args: [{"description": "A loop where one implementer fixes the problems the latest feedback names."}, {"regenerate": "research-iteration"}]
+check-args: [{"description": "A loop where one implementer fixes the problems the latest feedback names."}, {"regenerate": "iterate-and-check"}]
 ---
 
 # Loop authoring
@@ -18,7 +18,7 @@ It also regenerates the script of an installed loop whose definition is unchange
 ## Inputs
 
 - `description`: what the owner wants, verbatim.
-- `side`, `kind`: the side and kind the loop must have, when the caller knows them (`machine-config` asks for a task loop of its side); otherwise the editor takes them from the description.
+- `side`, `kind`: the side and kind the loop must have, when the caller knows them (a loop that asks for a task loop of its side passes both); otherwise the editor takes them from the description.
 - `regenerate`: instead of the above, the name of an installed loop whose script is stale or defective.
 - `answers`: the owner's replies so far, by review id.
 

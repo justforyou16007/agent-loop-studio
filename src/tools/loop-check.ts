@@ -467,7 +467,7 @@ export async function checkLoop(root: string, name: string): Promise<LoopReport>
       defects.push("check-args must be one line of JSON: a list of argument objects");
     }
   }
-  // A run gets the parameters' defaults as args.params, as setup records them for the project.
+  // A run gets the parameters' defaults as args.params, as a project records the values chosen.
   let parameters: LoopParameter[] = [];
   try {
     parameters = loopParameters(definition.toString("utf8"));

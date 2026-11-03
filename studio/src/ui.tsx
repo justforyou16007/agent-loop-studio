@@ -47,7 +47,7 @@ export function LoopBadges({ loop, compact = false }: { loop: LoopSummary; compa
   };
   return (
     <span className="inline-flex flex-wrap items-center gap-1">
-      <Badge tone={loop.kind === "task" ? "brand" : loop.kind === "setup" ? "loop" : "gray"}>
+      <Badge tone={loop.kind === "task" ? "brand" : "gray"}>
         {t(`kind_${loop.kind}` as TextKey)}
       </Badge>
       <Badge tone="outline">{t(`source_${loop.source}` as TextKey)}</Badge>

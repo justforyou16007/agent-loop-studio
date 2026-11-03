@@ -61,6 +61,7 @@ try {
   for (const loop of ["loop-authoring", "role-authoring", "library-contribution"])
     assert.ok(fs.existsSync(path.join(plain, ".claude/loops", `${loop}.md`)), loop);
   assert.ok(read(path.join(plain, ".claude/settings.json")).hooks.PreToolUse, "the hooks guard every loop from the start");
+  assert.equal(read(path.join(plain, ".claude/settings.json")).agent, "task-manager", "every session runs as the entry role from the start");
   const shown = JSON.parse(execFileSync(process.execPath, [path.join(plain, ".contrejour/dist/tools/project-cli.js"), "show", "--project", plain], { encoding: "utf8" }));
   assert.deepEqual([shown.profile, shown.entry_role, shown.loop], ["default", "task-manager", null]);
   const refused = spawnSync(process.execPath, [installer, "--role", "worker", "--project", path.join(sandbox, "nope")], { encoding: "utf8" });

@@ -3,9 +3,9 @@
  * and the workflow script generated from it in `.claude/workflows/<name>.js`.
  * The script ends with the digest of the definition it was generated from, so a
  * changed definition shows the script is stale. A definition declares the
- * loop's parameters, its hyperparameters; setup records the loop a project runs
- * and the values the owner chose in `.contrejour/loop.json`, and the script
- * reads them from `args.params`.
+ * loop's parameters, its hyperparameters; the owner chooses the loop a project
+ * runs and their values in the Studio, recorded in `.contrejour/loop.json`, and
+ * the script reads them from `args.params`.
  */
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -178,12 +178,10 @@ export const parameterDefaults = (parameters: LoopParameter[]): Record<string, u
   Object.fromEntries(parameters.map((parameter) => [parameter.name, parameter.default]));
 
 /**
- * What a loop is for: `task`, the work a project runs (setup chooses one, the
- * task manager or the validation service runs it); `setup`, setting the project
- * up; `on-request`, work the owner asks for. A definition without `kind` is a
- * task loop.
+ * What a loop is for: `task`, the work a project runs again and again (the owner
+ * chooses one, the project's entry role runs it); `on-request`, work the owner
+ * asks for. A definition without `kind` is a task loop.
  */
-/** A task loop is the project's work, run again and again; an on-request loop runs when the owner asks. */
 export const LOOP_KINDS = ["task", "on-request"] as const;
 export function loopKind(root: string, name: string): string {
   const file = loopDefinitionPath(root, name);
@@ -196,7 +194,7 @@ export function loopSide(root: string, name: string): string | null {
   return fs.existsSync(file) ? (frontmatter(fs.readFileSync(file, "utf8")).side ?? null) : null;
 }
 
-/** The loop a project runs and the parameter values the owner confirmed, as setup applied them. */
+/** The loop a project runs and the parameter values the owner chose for it. */
 export interface SelectedLoop {
   loop: string;
   params: Record<string, unknown>;

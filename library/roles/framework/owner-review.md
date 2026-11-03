@@ -30,7 +30,7 @@ The loop passes JSON:
 Without an answer:
 
 1. Read every material. Open the files; do not rely on another role's summary of them.
-2. Write the review note `.contrejour/reviews/<review_id, with every character other than letters, digits, `.`, `_` and `-` replaced by `-`>.md`, in the project language (`project.language` of the setup draft; English when there is none). It holds, in this order:
+2. Write the review note `.contrejour/reviews/<review_id, with every character other than letters, digits, `.`, `_` and `-` replaced by `-`>.md`, in the language the owner writes in (their messages and `task.md`; English when unsure). It holds, in this order:
    - what is being decided, and what follows from each answer;
    - exactly what is approved: the version (`review_id`) and the full content, or the precise files to read for it, with what changed when it is a change to something existing;
    - everything a step flagged: failed checks, warnings, open issues, the findings of the project's own checks, what was left out and why;
