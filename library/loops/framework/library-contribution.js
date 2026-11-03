@@ -1,7 +1,7 @@
 export const meta = {
   name: "library-contribution",
   description:
-    "Send what this project added or changed to the shared library as a pull request, with the owner's review of exactly that plan",
+    "Send what this project added or changed back to the libraries it came from, with the owner's review of exactly that plan, one pull request per library",
   whenToUse:
     "When the owner asks, once a task has finished. Run with {}, then again with the owner's replies in answers.",
   phases: [{ title: "Plan" }, { title: "Review" }, { title: "Contribute" }],
@@ -27,12 +27,22 @@ const PLAN = {
           kind: { type: "string" },
           name: { type: "string" },
           side: { type: "string" },
+          library: { type: "string" },
           state: { type: "string" },
           description: { type: "string" },
           judgement: { type: "string" },
           warnings: STRINGS,
         },
-        required: ["kind", "name", "side", "state", "description", "judgement", "warnings"],
+        required: [
+          "kind",
+          "name",
+          "side",
+          "library",
+          "state",
+          "description",
+          "judgement",
+          "warnings",
+        ],
       },
     },
     not_selected: {
@@ -85,14 +95,35 @@ const SENT = {
   type: "object",
   properties: {
     status: { type: "string" },
-    pull_request: { type: "string" },
-    compare_url: { type: "string" },
-    branch: { type: "string" },
-    base: { type: "string" },
-    files: STRINGS,
     reason: { type: "string" },
+    pull_requests: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          library: { type: "string" },
+          status: { type: "string" },
+          pull_request: { type: "string" },
+          compare_url: { type: "string" },
+          branch: { type: "string" },
+          base: { type: "string" },
+          files: STRINGS,
+          reason: { type: "string" },
+        },
+        required: [
+          "library",
+          "status",
+          "pull_request",
+          "compare_url",
+          "branch",
+          "base",
+          "files",
+          "reason",
+        ],
+      },
+    },
   },
-  required: ["status", "pull_request", "compare_url", "branch", "base", "files", "reason"],
+  required: ["status", "reason", "pull_requests"],
 };
 
 const answers = (args && args.answers) || {};
@@ -151,7 +182,7 @@ for (let attempt = 1; attempt <= 6; attempt += 1) {
   const decided = await review(id, {
     subject: "a contribution to the shared library",
     request:
-      "Approve sending exactly these loops and roles to the shared library as a pull request, or say what to leave out or change.",
+      "Approve sending exactly these loops and roles back to the libraries named for each, one pull request per library, or say what to leave out or change.",
     materials: {
       units: plan.units,
       not_selected: plan.not_selected,
@@ -180,4 +211,4 @@ for (let attempt = 1; attempt <= 6; attempt += 1) {
 }
 return { contributed: false, reason: "no plan was approved within 6 rounds" };
 
-// contrejour-loop-definition-sha256: 3ad75bc2f9b3213694b8dd3c9adca4f3253ef9940987748179aaeb1e90c5ec6f
+// contrejour-loop-definition-sha256: f7f3b9309b67a506fbb060fdef0bd51e827e24262179d583872c3b085a4fef18

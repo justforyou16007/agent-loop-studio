@@ -38,6 +38,10 @@ Dependencies point one way: a project depends on a version of this framework and
 
 `studio.js` serves the page (built by Vite from `studio/` into `dist/studio/`) and its data on this machine's own address only, to the one browser signed in with the link it prints; requests that act need the page's own header, so another site cannot act for the owner. It reads loops, roles and the trajectory index; it changes the project only through the owner's actions (choosing the task loop and its values, creating or copying a project) and through loops run in background sessions as the entry role, whose progress it follows in Claude Code's run journal.
 
+## Libraries
+
+A project's loops and roles come from libraries: the `library/` of the checkout it was installed from and, when that checkout is a project package's, of the framework's (`agent-loop-studio/`) and the community's (`agent-loop-community/`) it carries as submodules. The framework's `framework` folder holds its own base loops and roles; the community's holds those any project can use that projects contributed, and its other folders the loops and roles of kinds of projects; a package's folders hold its own sides'. Using a loop in the Studio, the loop viewer and reference projects look in all of them.
+
 ## Contributions
 
-`library-cli.js` keeps a baseline of every seeded file in `.contrejour/seeded/`, so a contribution holds only what the project changed, merged three ways with what the library changed meanwhile. It blocks keys, tokens, machine paths and hidden files, and the owner approves exactly what leaves before the pull request is opened.
+`library-cli.js` keeps a baseline of every seeded file in `.contrejour/seeded/`, so a contribution holds only what the project changed, merged three ways with what its library changed meanwhile. Each loop or role goes back to the library it came from; a new one goes to the library of its side, and one any project can use to the community's. It blocks keys, tokens, machine paths and hidden files, checks the result with the libraries laid together as a project receives them, and the owner approves exactly what leaves, in one review, before one pull request per library is opened.

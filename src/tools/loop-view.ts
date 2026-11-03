@@ -113,6 +113,15 @@ const readJson = (file: string): unknown => {
     return null;
   }
 };
+/** The side folders under a library's `loops/` or `roles/` (a placeholder file such as `.gitkeep` is not a side). */
+const sideFolders = (dir: string): string[] =>
+  fs.existsSync(dir)
+    ? fs
+        .readdirSync(dir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+        .sort()
+    : [];
 const markdownFiles = (dir: string): string[] =>
   fs.existsSync(dir)
     ? fs
@@ -229,7 +238,7 @@ function libraryFiles(roots: string[], side: string) {
   for (const library of roots) {
     // The framework's files and the project's own side's; without a profile, every side the library has.
     const present = fs.existsSync(path.join(library, "library", "loops"))
-      ? fs.readdirSync(path.join(library, "library", "loops"))
+      ? sideFolders(path.join(library, "library", "loops"))
       : ["framework"];
     const sides = present.includes(side) ? ["framework", side] : present;
     for (const dir of sides) {
@@ -604,8 +613,7 @@ export function fingerprint(root: string): string {
     for (const base of libraryRoots(root))
       for (const kind of ["loops", "roles"]) {
         const dir = path.join(base, "library", kind);
-        for (const side of fs.existsSync(dir) ? fs.readdirSync(dir) : [])
-          dirs.push(path.join(dir, side));
+        for (const side of sideFolders(dir)) dirs.push(path.join(dir, side));
       }
   const files = [
     selectedLoopPath(root),

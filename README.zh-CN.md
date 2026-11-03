@@ -5,7 +5,7 @@
 框架负责创建、复用和优化流程与角色：
 
 - **Studio**：owner 在本机浏览器里用的控制台。在对话框里说想要什么，它马上列出相近的流程，每个都能预览流程图，并把最接近的画到画布上，超参数排在旁边、用虚线连到它们影响的步骤。点步骤或箭头、说要怎么改，`loop-authoring` 就在后台 Claude Code 会话里起草修改，改好后停下请你审核，草稿画在画布上。在这里还可以选定项目的主任务流程和超参数、运行任意流程并看着它一步步执行、在对话里修改角色，以及管理工作区里的多个项目：从参考项目新建，或复制已有项目。
-- **基础角色和流程**：`loop-authoring`、`role-authoring`（以及 `loop-query`、`loop-editor`、`role-creator`），`owner-review`；`trajectory-optimizer` 根据轨迹修复角色；`project-memory` 记下做成了什么、没做成什么及原因；`task-manager` 是会话的角色；`library-contribution`（以及 `library-contributor`）在 owner 审过要发出的确切内容后，把项目学到的东西作为 PR 送回共享库。
+- **基础角色和流程**：`loop-authoring`、`role-authoring`（以及 `loop-query`、`loop-editor`、`role-creator`），`owner-review`；`trajectory-optimizer` 根据轨迹修复角色；`project-memory` 记下做成了什么、没做成什么及原因；`task-manager` 是会话的角色；`library-contribution`（以及 `library-contributor`）在 owner 审过要发出的确切内容后，把项目学到的东西送回它来自的地方：改过的基础流程和角色回本仓库，新写的、任何项目都能用的进社区库，每个库各开一个 PR。
 - **检查**：`loop-check` 不调用模型，用假角色把流程脚本跑几遍、走到每个分支；角色文件检查优化器依赖的各节是否齐全。
 - **hooks** 只做记录或拦截：每个结束的角色留下轨迹；交给流程的回答必须是 owner 在流程提问之后亲手输入的消息。
 

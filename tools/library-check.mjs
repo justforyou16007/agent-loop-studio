@@ -22,7 +22,12 @@ const files = (dir, extension) =>
 // The package's manifest names the hook actions its loops may declare; the shared library has none.
 const manifestFile = path.join(root, "project.json");
 const manifest = fs.existsSync(manifestFile) ? JSON.parse(fs.readFileSync(manifestFile, "utf8")) : undefined;
-const sides = fs.existsSync(path.join(library, "loops")) ? fs.readdirSync(path.join(library, "loops")) : [];
+const sides = fs.existsSync(path.join(library, "loops"))
+  ? fs
+      .readdirSync(path.join(library, "loops"), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+  : [];
 
 if (stamp)
   for (const side of sides) {

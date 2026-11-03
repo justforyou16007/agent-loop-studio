@@ -1,12 +1,19 @@
 #!/usr/bin/env node
 /**
  * The library-contributor role's tool. A project sends what it added or changed
- * back to the shared library as a pull request, once at least one of its tasks
- * has finished. The installer keeps a copy of every file it seeded in
+ * back to the libraries it came from as pull requests, once at least one of its
+ * tasks has finished. The installer keeps a copy of every file it seeded in
  * `.contrejour/seeded/`: against that baseline, a file the project left alone is
  * never sent, however far the library has moved on, so a contribution cannot undo
- * anyone else's work. `plan` lists what would leave and binds it to a digest,
- * which `contribute` requires, so what leaves is what the owner approved.
+ * anyone else's work. `plan` lists what would leave, and where, and binds it to a
+ * digest, which `contribute` requires, so what leaves is what the owner approved.
+ *
+ * A project package carries the framework's library and the community's as
+ * submodules next to its own. Each loop or role goes back to the library it came
+ * from; a new one goes to the library of its side, except that one any project can
+ * use goes to the community's, since the framework's holds only its own base loops
+ * and roles. One review covers everything that leaves; each library gets its own
+ * pull request.
  */
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -20,6 +27,7 @@ import {
   installationFile,
   installedLibrary,
   installedRole,
+  sidesOf,
   type Role,
 } from "./installation.js";
 import { checkLoop, checkRoles, type LoopReport, type RoleReport } from "./loop-check.js";
@@ -81,29 +89,34 @@ interface PlanUnit {
   kind: "role" | "loop";
   name: string;
   side: string | null;
+  /** The library it goes to, by name, once it has a side. */
+  library: string | null;
   description: string;
   state: State;
   reason?: string;
   warnings: string[];
   files: PlanFile[];
 }
-type LibraryView =
-  | {
-      available: true;
-      checkout: string;
-      remote: string | null;
-      base_branch: string;
-      base_commit: string;
-      note: string | null;
-    }
-  | { available: false; reason: string; upstream: string | null };
+interface ResolvedView {
+  available: true;
+  name: string;
+  checkout: string;
+  remote: string | null;
+  base_branch: string;
+  base_commit: string;
+  note: string | null;
+}
+type LibraryView = ResolvedView | { available: false; reason: string; upstream: string | null };
 interface PublicPlan {
   project: string;
   side: Role;
   /** At least one task finished, as the project counts them (a run of its task loop, unless it says otherwise). */
   eligible: boolean;
   finished_tasks: string[];
+  /** The checkout this project was installed from (or the clone made for it). */
   library: LibraryView;
+  /** Every library a unit can go to: that checkout's, then the framework's and the community's it carries. */
+  libraries: ResolvedView[];
   selected: PlanUnit[];
   not_selected: PlanUnit[];
   unchanged: number;
@@ -115,6 +128,8 @@ interface PublicPlan {
   digest: string | null;
 }
 interface LibrarySource {
+  /** The repository's name: `agent-loop-studio`, `agent-loop-community`, or the package's. */
+  name: string;
   checkout: string;
   remote: string | null;
   branch: string;
@@ -166,6 +181,9 @@ const readJson = (file: string): unknown => {
 const seededFile = (root: string, source: string): string =>
   path.join(root, ".contrejour", "seeded", ...source.split("/").slice(1));
 const clonePath = (root: string): string => path.join(contributionsDir(root), "library-checkout");
+/** The framework's library and the community's, as a project package carries them. */
+const FRAMEWORK_LIBRARY = "agent-loop-studio";
+const COMMUNITY_LIBRARY = "agent-loop-community";
 const logPath = (root: string): string => path.join(contributionsDir(root), "log.json");
 const checkPath = (root: string): string => path.join(contributionsDir(root), "check.json");
 const previewDir = (root: string): string => path.join(contributionsDir(root), "preview");
@@ -210,11 +228,35 @@ function upstreamUrl(root: string): string | null {
   const url = isRecord(repository) ? repository.url : repository;
   return typeof url === "string" && url ? url.replace(/^git\+/, "") : null;
 }
+/** A directory that is a Git repository of its own, not a folder of the one around it. */
+function isOwnRepository(dir: string): boolean {
+  if (!fs.existsSync(dir)) return false;
+  const top = git(dir, "rev-parse", "--show-toplevel");
+  return top.ok && fs.realpathSync(top.stdout.trim()) === fs.realpathSync(dir);
+}
 function checkoutOf(root: string): string | null {
   for (const candidate of [installedLibrary(root), clonePath(root)])
-    if (candidate && fs.existsSync(candidate) && git(candidate, "rev-parse", "--git-dir").ok)
-      return candidate;
+    if (candidate && isOwnRepository(candidate)) return candidate;
   return null;
+}
+/**
+ * The libraries a unit of this project can go back to: the checkout it was
+ * installed from (or the clone made for it), then the framework's and the
+ * community's, which a project package's checkout carries as submodules.
+ */
+function checkoutsOf(root: string): { name: string; checkout: string }[] {
+  const main = checkoutOf(root);
+  if (!main) return [];
+  const remote = git(main, "config", "--get", "remote.origin.url").stdout.trim();
+  const found = [
+    { name: (remote && githubRepo(remote)?.name) || path.basename(main), checkout: main },
+  ];
+  for (const name of [FRAMEWORK_LIBRARY, COMMUNITY_LIBRARY]) {
+    const checkout = path.join(main, name);
+    if (fs.existsSync(path.join(checkout, "library")) && isOwnRepository(checkout))
+      found.push({ name, checkout });
+  }
+  return found;
 }
 
 /**
@@ -222,7 +264,7 @@ function checkoutOf(root: string): string | null {
  * default branch, as of now. A repository whose default branch has no library yet
  * falls back to the branch this checkout is on, and says so.
  */
-function resolveLibrary(checkout: string): LibrarySource {
+function resolveLibrary(name: string, checkout: string): LibrarySource {
   const remote = git(checkout, "config", "--get", "remote.origin.url").stdout.trim() || null;
   const notes: string[] = [];
   if (remote) {
@@ -260,6 +302,7 @@ function resolveLibrary(checkout: string): LibrarySource {
       `the default branch ${defaultBranch} has no library yet, so this contribution targets ${base.branch}`,
     );
   return {
+    name,
     checkout,
     remote,
     branch: base.branch,
@@ -387,39 +430,73 @@ interface Classified extends PlanUnit {
 interface PlanContext {
   root: string;
   side: Role;
-  source: LibrarySource;
+  /** The library sides this project receives, `framework` first. */
+  sides: string[];
+  /** The libraries a unit can go to, the checkout the project was installed from first. */
+  libraries: LibrarySource[];
   sent: Map<string, Set<string>>;
   seeded: Set<string>;
 }
 
-function showAtBase(context: PlanContext, target: string): string | null {
-  const shown = git(context.source.checkout, "show", `${context.source.ref}:${target}`);
+function showAtBase(library: LibrarySource, target: string): string | null {
+  const shown = git(library.checkout, "show", `${library.ref}:${target}`);
   return shown.ok ? normal(shown.stdout) : null;
 }
+/** The side folders a library has under `library/loops` or `library/roles`, as of its base. */
+function sidesAt(library: LibrarySource, directory: string): string[] {
+  const listed = git(
+    library.checkout,
+    "ls-tree",
+    "--name-only",
+    "-d",
+    `${library.ref}:library/${directory}`,
+  );
+  return listed.stdout.split("\n").filter(Boolean);
+}
 
-/** A side's project receives the framework's files and its own; a name must stay unique across them. */
+/**
+ * Where a unit goes: back to the library it came from, the first holding its
+ * file. A new one goes to the library of its side; one any project can use
+ * (`framework`) goes to the community's when the project has it, since the
+ * framework's own library holds only the framework's base loops and roles, and so
+ * does one of a side no library holds yet.
+ */
+function destinationOf(context: PlanContext, targets: string[], side: string): LibrarySource {
+  const { libraries } = context;
+  const holding = libraries.find((library) =>
+    targets.some((target) => showAtBase(library, target) !== null),
+  );
+  if (holding) return holding;
+  const community = libraries.find((library) => library.name === COMMUNITY_LIBRARY);
+  if (side === "framework" && community) return community;
+  const home = libraries.find(
+    (library) =>
+      sidesAt(library, "roles").includes(side) || sidesAt(library, "loops").includes(side),
+  );
+  return home ?? community ?? libraries[0]!;
+}
+
+/**
+ * A side's project receives the framework's files and its own; a name must stay
+ * unique across them, in every library: one any project can use may not share its
+ * name with any other role, and one of a side may not share it with one any
+ * project can use.
+ */
 function nameTakenElsewhere(
   context: PlanContext,
+  destination: LibrarySource,
   directory: string,
   unitSide: string,
   file: string,
-) {
-  const sides = (directory: string) =>
-    (
-      git(
-        context.source.checkout,
-        "ls-tree",
-        "--name-only",
-        `${context.source.ref}:library/${directory}`,
-      ).stdout || ""
-    )
-      .split("\n")
-      .filter(Boolean);
-  const others =
-    unitSide === "framework"
-      ? sides(directory).filter((side) => side !== "framework")
-      : ["framework"];
-  return others.find((other) => showAtBase(context, `library/${directory}/${other}/${file}`));
+): string | undefined {
+  for (const library of context.libraries)
+    for (const side of sidesAt(library, directory)) {
+      if (library === destination && side === unitSide) continue;
+      if (unitSide !== "framework" && side !== "framework") continue;
+      if (showAtBase(library, `library/${directory}/${side}/${file}`) !== null)
+        return context.libraries.length > 1 ? `${side} in ${library.name}` : side;
+    }
+  return undefined;
 }
 
 function classifyRole(context: PlanContext, name: string): Classified {
@@ -432,6 +509,7 @@ function classifyRole(context: PlanContext, name: string): Classified {
     kind: "role",
     name,
     side: fields.side ?? null,
+    library: null,
     description: fields.description ?? "",
     state: "unchanged",
     warnings: [],
@@ -447,21 +525,23 @@ function classifyRole(context: PlanContext, name: string): Classified {
       state: "invalid",
       reason: `not in the form of a Contrejour role, so it stays in this project: ${defects.join("; ")}`,
     };
-  if (fields.side !== "framework" && fields.side !== side)
+  if (!context.sides.includes(fields.side ?? ""))
     return {
       ...unit,
       state: "wrong-side",
-      reason: `it serves the ${fields.side} side, and this is a ${side} project`,
+      reason: `it serves the ${fields.side} side, and this ${side} project receives ${context.sides.join(" and ")}`,
     };
   const target = `library/roles/${fields.side}/${name}.md`;
-  const taken = nameTakenElsewhere(context, "roles", fields.side, `${name}.md`);
+  const library = destinationOf(context, [target], fields.side);
+  const taken = nameTakenElsewhere(context, library, "roles", fields.side, `${name}.md`);
   if (taken)
     return {
       ...unit,
+      library: library.name,
       state: "conflict",
       reason: `the library has a role of this name under ${taken}`,
     };
-  const theirs = showAtBase(context, target);
+  const theirs = showAtBase(library, target);
   const sent = context.sent.get(target) ?? new Set<string>();
   const verdict = compare(ours, base, theirs, sent, context.seeded.has(source));
   let final = ours;
@@ -484,6 +564,7 @@ function classifyRole(context: PlanContext, name: string): Classified {
   }
   return {
     ...unit,
+    library: library.name,
     state,
     ...(reason ? { reason } : {}),
     files: [{ source, target, sha256: sha256(final) }],
@@ -505,6 +586,7 @@ async function classifyLoop(context: PlanContext, name: string): Promise<Classif
     kind: "loop",
     name,
     side: fields.side ?? null,
+    library: null,
     description: fields.description ?? "",
     state: "unchanged",
     warnings: [],
@@ -514,11 +596,11 @@ async function classifyLoop(context: PlanContext, name: string): Promise<Classif
   };
   if (baseDefinition !== null && definition === baseDefinition && script === baseScript)
     return unit;
-  if (fields.side !== "framework" && fields.side !== side)
+  if (!context.sides.includes(fields.side ?? ""))
     return {
       ...unit,
       state: "wrong-side",
-      reason: `it serves the ${fields.side ?? "unnamed"} side, and this is a ${side} project`,
+      reason: `it serves the ${fields.side ?? "unnamed"} side, and this ${side} project receives ${context.sides.join(" and ")}`,
     };
   const report = await checkLoop(root, name);
   if (!report.ok)
@@ -530,12 +612,17 @@ async function classifyLoop(context: PlanContext, name: string): Promise<Classif
         ...report.defects,
       ].join("; ")}`,
     };
+  const library = destinationOf(
+    context,
+    ["md", "js"].map((ext) => `library/loops/${fields.side}/${name}.${ext}`),
+    fields.side!,
+  );
   const pairs = [
     { source: definitionSource, ours: definition, base: baseDefinition, ext: "md" },
     { source: scriptSource, ours: script ?? "", base: baseScript, ext: "js" },
   ].map((pair) => {
     const target = `library/loops/${fields.side}/${name}.${pair.ext}`;
-    const theirs = showAtBase(context, target);
+    const theirs = showAtBase(library, target);
     const sent = context.sent.get(target) ?? new Set<string>();
     const seeded = context.seeded.has(pair.source);
     return {
@@ -553,6 +640,7 @@ async function classifyLoop(context: PlanContext, name: string): Promise<Classif
   }));
   const whole = {
     ...unit,
+    library: library.name,
     files,
     finals: new Map(pairs.map((pair) => [pair.target, pair.ours])),
     before: new Map(
@@ -717,15 +805,29 @@ export async function checkLibrary(
 }
 
 /** The defects, in the library this contribution would produce, of what it carries. */
+/**
+ * The defects, in the libraries this contribution would produce, of what it
+ * carries: checked as a project receives them, the framework's and the
+ * community's library laid under the package's, with the planned text in place.
+ */
 async function checkResult(
   root: string,
-  source: LibrarySource,
+  libraries: LibrarySource[],
   selected: Classified[],
 ): Promise<{ ok: boolean; defects: string[] }> {
-  return inWorktree(root, source, ["--detach"], async (dir) => {
-    writeFinals(dir, selected);
+  const merged = fs.mkdtempSync(path.join(os.tmpdir(), "contrejour-contribution-check-"));
+  try {
+    for (const library of [...libraries.slice(1), libraries[0]!])
+      await inWorktree(root, library, ["--detach"], (dir) => {
+        if (fs.existsSync(path.join(dir, "library")))
+          fs.cpSync(path.join(dir, "library"), path.join(merged, "library"), {
+            recursive: true,
+            filter: (file) => path.basename(file) !== ".gitkeep",
+          });
+      });
+    writeFinals(merged, selected);
     const { reports } = await checkLibrary(
-      path.join(dir, "library"),
+      path.join(merged, "library"),
       hasManifest(root) ? readManifest(root) : undefined,
     );
     const names = new Set(selected.map((unit) => `${unit.kind}:${unit.name}`));
@@ -740,7 +842,9 @@ async function checkResult(
           for (const defect of role.defects) defects.add(`role ${role.role}: ${defect}`);
     }
     return { ok: !defects.size, defects: [...defects] };
-  });
+  } finally {
+    fs.rmSync(merged, { recursive: true, force: true });
+  }
 }
 
 /** The exact text that would leave, and the diff the pull request will show. */
@@ -752,14 +856,17 @@ function writePreview(root: string, selected: Classified[]): string | null {
   const before = path.join(dir, "before");
   fs.mkdirSync(after, { recursive: true });
   fs.mkdirSync(before, { recursive: true });
-  writeFinals(after, selected);
   for (const unit of selected) {
+    // Each library's files under its name: each gets its own pull request.
+    const library = unit.library ?? "library";
+    writeFinals(path.join(after, library), [unit]);
     for (const [target, text] of unit.before) {
-      const file = path.join(before, ...target.split("/"));
+      const file = path.join(before, library, ...target.split("/"));
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, text);
     }
-    for (const file of unit.files) file.preview = path.join(after, ...file.target.split("/"));
+    for (const file of unit.files)
+      file.preview = path.join(after, library, ...file.target.split("/"));
   }
   const changes = path.join(dir, "changes.diff");
   fs.writeFileSync(
@@ -780,7 +887,7 @@ function checkState(root: string, side: Role, digest: string | null): PublicPlan
 async function makePlan(
   root: string,
   exclude: string[],
-): Promise<{ plan: PublicPlan; selected: Classified[]; source: LibrarySource | null }> {
+): Promise<{ plan: PublicPlan; selected: Classified[]; libraries: LibrarySource[] }> {
   const side = installedRole(root);
   const finished = finishedTasks(root, side, extensionOf(root));
   const shared = {
@@ -789,19 +896,20 @@ async function makePlan(
     eligible: finished.length > 0,
     finished_tasks: finished,
   };
-  const checkout = checkoutOf(root);
-  if (!checkout) {
+  const checkouts = checkoutsOf(root);
+  if (!checkouts.length) {
     const upstream = upstreamUrl(root);
     return {
       plan: {
         ...shared,
         library: {
           available: false,
-          reason: `no checkout of the Contrejour repository is recorded for this project${
+          reason: `no checkout of the repository this project was installed from is recorded${
             upstream ? `: \`library-cli.js clone\` fetches one from ${upstream}` : ""
           }`,
           upstream,
         },
+        libraries: [],
         selected: [],
         not_selected: [],
         unchanged: 0,
@@ -811,15 +919,16 @@ async function makePlan(
         digest: null,
       },
       selected: [],
-      source: null,
+      libraries: [],
     };
   }
-  const source = resolveLibrary(checkout);
+  const libraries = checkouts.map(({ name, checkout }) => resolveLibrary(name, checkout));
   const installed = readJson(installationFile(root));
   const context: PlanContext = {
     root,
     side,
-    source,
+    sides: sidesOf(root),
+    libraries,
     sent: sentHashes(root),
     seeded: new Set(
       isRecord(installed) && Array.isArray(installed.seeded) ? (installed.seeded as string[]) : [],
@@ -845,7 +954,7 @@ async function makePlan(
       continue;
     }
     const paths = new Set(texts.flatMap((text) => text.match(MACHINE_PATH) ?? []));
-    for (const known of [root, checkout, home])
+    for (const known of [root, ...libraries.map((library) => library.checkout), home])
       if (texts.some((text) => text.includes(known))) paths.add(known);
     if (paths.size)
       unit.warnings.push(`it names paths of this machine: ${[...paths].sort().join(", ")}`);
@@ -856,38 +965,46 @@ async function makePlan(
   }
   const selected = units.filter((unit) => SENDABLE.includes(unit.state));
   const leaving = selected
-    .flatMap((unit) => unit.files)
-    .map((file) => ({ target: file.target, sha256: file.sha256 }))
-    .sort((a, b) => a.target.localeCompare(b.target));
+    .flatMap((unit) =>
+      unit.files.map((file) => ({
+        library: unit.library,
+        target: file.target,
+        sha256: file.sha256,
+      })),
+    )
+    .sort((a, b) => `${a.library}/${a.target}`.localeCompare(`${b.library}/${b.target}`));
   const digest = leaving.length ? sha256(JSON.stringify(leaving)) : null;
   const changesFile = writePreview(root, selected);
   const present = (unit: Classified): PlanUnit => {
     const { finals: _finals, before: _before, ...shown } = unit;
     return shown;
   };
+  const view = (library: LibrarySource): ResolvedView => ({
+    available: true,
+    name: library.name,
+    checkout: library.checkout,
+    remote: library.remote,
+    base_branch: library.branch,
+    base_commit: library.commit,
+    note: library.note,
+  });
   return {
     plan: {
       ...shared,
-      library: {
-        available: true,
-        checkout,
-        remote: source.remote,
-        base_branch: source.branch,
-        base_commit: source.commit,
-        note: source.note,
-      },
+      library: view(libraries[0]!),
+      libraries: libraries.map(view),
       selected: selected.map(present),
       not_selected: units
         .filter((unit) => !SENDABLE.includes(unit.state) && unit.state !== "unchanged")
         .map(present),
       unchanged: units.filter((unit) => unit.state === "unchanged").length,
       changes_file: changesFile,
-      library_check: selected.length ? await checkResult(root, source, selected) : null,
+      library_check: selected.length ? await checkResult(root, libraries, selected) : null,
       check: checkState(root, side, digest),
       digest,
     },
     selected,
-    source,
+    libraries,
   };
 }
 
@@ -932,7 +1049,8 @@ function cloneLibrary(root: string): { checkout: string; cloned: boolean } {
   const target = clonePath(root);
   fs.rmSync(target, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  const cloned = run("git", ["clone", "--quiet", upstream, target]);
+  // A project package's checkout carries the framework's and the community's libraries as submodules.
+  const cloned = run("git", ["clone", "--quiet", "--recurse-submodules", upstream, target]);
   if (!cloned.ok) failA1("LIBRARY_UNAVAILABLE", `could not clone ${upstream}: ${cloned.stderr}`);
   return { checkout: target, cloned: true };
 }
@@ -1066,14 +1184,14 @@ function pushAndOpen(
   };
 }
 
-function pullRequestText(plan: PublicPlan): { title: string; body: string } {
-  const added = plan.selected.filter((unit) => unit.state === "new").length;
-  const changed = plan.selected.length - added;
+function pullRequestText(plan: PublicPlan, units: PlanUnit[]): { title: string; body: string } {
+  const added = units.filter((unit) => unit.state === "new").length;
+  const changed = units.length - added;
   const title = `library: ${plan.project} (${plan.side}): ${[
     ...(added ? [`${added} new`] : []),
     ...(changed ? [`${changed} changed`] : []),
   ].join(", ")}`;
-  const rows = plan.selected.map(
+  const rows = units.map(
     (unit) =>
       `| ${unit.kind} | \`${unit.name}\` | ${unit.side} | ${unit.state} | ${unit.description.replace(/\|/g, "\\|")} |`,
   );
@@ -1094,13 +1212,111 @@ function pullRequestText(plan: PublicPlan): { title: string; body: string } {
   return { title, body };
 }
 
+interface Sent extends Published {
+  library: string;
+  status: "pushed" | "local-only" | "not-committed";
+  branch: string | null;
+  base: string;
+  files: string[];
+}
+
+/** Commit one library's part on a new branch, push it and open its pull request. */
+async function sendTo(
+  root: string,
+  plan: PublicPlan,
+  library: LibrarySource,
+  units: Classified[],
+): Promise<Sent> {
+  const files = units.flatMap((unit) => unit.files);
+  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const stem = `library/${plan.project}-${plan.side}-${stamp}`;
+  const taken = (name: string) =>
+    git(library.checkout, "rev-parse", "--verify", "--quiet", `refs/heads/${name}`).ok ||
+    (library.remote !== null &&
+      git(
+        library.checkout,
+        "ls-remote",
+        "--heads",
+        "origin",
+        `refs/heads/${name}`,
+      ).stdout.trim() !== "");
+  let branch = stem;
+  for (let attempt = 2; taken(branch); attempt += 1) branch = `${stem}-${attempt}`;
+
+  const { title, body } = pullRequestText(plan, units);
+  let failure: string | null = null;
+  await inWorktree(root, library, ["-b", branch], (dir) => {
+    writeFinals(dir, units);
+    const added = git(dir, "add", "--", "library");
+    // The checkout's own hooks need its dependencies, and helper checks already ran on this text.
+    const commit = added.ok
+      ? git(dir, "commit", "--no-verify", "--quiet", "-m", title, "-m", body)
+      : added;
+    if (!commit.ok) {
+      git(library.checkout, "worktree", "remove", "--force", dir);
+      git(library.checkout, "branch", "-D", branch);
+      failure = `git could not commit in ${library.checkout}: ${commit.stderr}`;
+    }
+  });
+  if (failure !== null)
+    return {
+      library: library.name,
+      status: "not-committed",
+      branch: null,
+      base: library.branch,
+      pushed: false,
+      remote: null,
+      pull_request: null,
+      compare_url: null,
+      reason: failure,
+      files: files.map((file) => file.target),
+    };
+
+  const bodyFile = path.join(contributionsDir(root), "pull-request.md");
+  fs.writeFileSync(bodyFile, body);
+  const published = pushAndOpen(library, branch, title, bodyFile);
+  if (published.pushed) {
+    const log = readJson(logPath(root));
+    const contributions =
+      isRecord(log) && Array.isArray(log.contributions) ? log.contributions : [];
+    writeStateJsonAtomic(logPath(root), {
+      schema_version: 1,
+      contributions: [
+        ...contributions,
+        {
+          at: new Date().toISOString(),
+          library: library.name,
+          branch,
+          base: library.branch,
+          remote: published.remote,
+          pull_request: published.pull_request,
+          files: files.map((file) => ({ target: file.target, sha256: file.sha256 })),
+        },
+      ],
+    });
+  }
+  return {
+    library: library.name,
+    status: published.pushed ? "pushed" : "local-only",
+    branch,
+    base: library.branch,
+    ...published,
+    files: files.map((file) => file.target),
+  };
+}
+
 async function contribute(
   root: string,
   digest: string,
   exclude: string[],
-): Promise<Published & { status: string; branch: string; base: string; files: string[] }> {
-  const { plan, selected, source } = await makePlan(root, exclude);
-  if (!plan.library.available || !source)
+): Promise<{
+  status: "pushed" | "partly-pushed" | "local-only";
+  reason: string | null;
+  pull_requests: Sent[];
+  files: string[];
+}> {
+  const { plan, selected, libraries } = await makePlan(root, exclude);
+  if (!plan.library.available || !libraries.length)
     failA1("LIBRARY_UNAVAILABLE", plan.library.available ? "" : plan.library.reason);
   if (!plan.eligible)
     failA1(
@@ -1123,64 +1339,22 @@ async function contribute(
   if (plan.check === "failed")
     failA1("CHECK_FAILED", "the project's check found something in these files that may not leave");
 
-  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  const stem = `library/${plan.project}-${plan.side}-${stamp}`;
-  const taken = (name: string) =>
-    git(source.checkout, "rev-parse", "--verify", "--quiet", `refs/heads/${name}`).ok ||
-    (source.remote !== null &&
-      git(source.checkout, "ls-remote", "--heads", "origin", `refs/heads/${name}`).stdout.trim() !==
-        "");
-  let branch = stem;
-  for (let attempt = 2; taken(branch); attempt += 1) branch = `${stem}-${attempt}`;
-
-  const { title, body } = pullRequestText(plan);
-  let committed = false;
-  await inWorktree(root, source, ["-b", branch], (dir) => {
-    writeFinals(dir, selected);
-    const added = git(dir, "add", "--", "library");
-    // The checkout's own hooks need its dependencies, and helper checks already ran on this text.
-    const commit = added.ok
-      ? git(dir, "commit", "--no-verify", "--quiet", "-m", title, "-m", body)
-      : added;
-    if (!commit.ok) {
-      git(source.checkout, "worktree", "remove", "--force", dir);
-      git(source.checkout, "branch", "-D", branch);
-      failA1("COMMIT_FAILED", `git could not commit in ${source.checkout}: ${commit.stderr}`);
-    }
-    committed = true;
-  });
-  if (!committed) failA1("COMMIT_FAILED", "nothing was committed");
-
-  const bodyFile = path.join(contributionsDir(root), "pull-request.md");
-  fs.writeFileSync(bodyFile, body);
-  const published = pushAndOpen(source, branch, title, bodyFile);
-  const files = selected.flatMap((unit) => unit.files);
-  if (published.pushed) {
-    const log = readJson(logPath(root));
-    const contributions =
-      isRecord(log) && Array.isArray(log.contributions) ? log.contributions : [];
-    writeStateJsonAtomic(logPath(root), {
-      schema_version: 1,
-      contributions: [
-        ...contributions,
-        {
-          at: new Date().toISOString(),
-          branch,
-          base: source.branch,
-          remote: published.remote,
-          pull_request: published.pull_request,
-          files: files.map((file) => ({ target: file.target, sha256: file.sha256 })),
-        },
-      ],
-    });
+  // One pull request for each library this contribution reaches.
+  const sent: Sent[] = [];
+  for (const library of libraries) {
+    const units = selected.filter((unit) => unit.library === library.name);
+    if (units.length) sent.push(await sendTo(root, plan, library, units));
   }
   fs.rmSync(previewDir(root), { recursive: true, force: true });
+  const pushed = sent.filter((entry) => entry.pushed).length;
+  const reasons = sent
+    .filter((entry) => entry.reason)
+    .map((entry) => (sent.length > 1 ? `${entry.library}: ${entry.reason}` : entry.reason!));
   return {
-    status: published.pushed ? "pushed" : "local-only",
-    branch,
-    base: source.branch,
-    ...published,
-    files: files.map((file) => file.target),
+    status: pushed === sent.length ? "pushed" : pushed ? "partly-pushed" : "local-only",
+    reason: reasons.join("; ") || null,
+    pull_requests: sent,
+    files: sent.flatMap((entry) => entry.files),
   };
 }
 
@@ -1200,7 +1374,9 @@ function cli(): void {
       if (project) loadedExtension = await loadExtension(path.resolve(project));
       const result = await work();
       console.log(JSON.stringify(result, null, 2));
-      if (isRecord(result) && result.status === "local-only") process.exitCode = 1;
+      // Something approved did not leave: the owner hears why.
+      if (isRecord(result) && ["local-only", "partly-pushed"].includes(String(result.status)))
+        process.exitCode = 1;
     } catch (error) {
       console.error(
         JSON.stringify(
@@ -1228,7 +1404,9 @@ function cli(): void {
     );
   program
     .command("clone")
-    .description("Fetch a checkout of the Contrejour repository, for a project without one")
+    .description(
+      "Fetch a checkout of the repository this project was installed from, for a project without one",
+    )
     .requiredOption("--project <dir>")
     .action((options: { project: string }) =>
       action(() => cloneLibrary(path.resolve(options.project)))(),
@@ -1252,7 +1430,9 @@ function cli(): void {
     );
   program
     .command("contribute")
-    .description("Send exactly what the plan with this digest lists, as a pull request")
+    .description(
+      "Send exactly what the plan with this digest lists, as one pull request per library",
+    )
     .requiredOption("--project <dir>")
     .requiredOption("--digest <sha256>", "the digest of the plan the owner approved")
     .option("--exclude <names>", "the same list the plan was made with")
