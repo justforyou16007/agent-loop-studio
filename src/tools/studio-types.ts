@@ -100,6 +100,8 @@ export interface ProjectSummary {
   language: "zh" | "en";
   library: string | null;
   chosen: { loop: string; params: Record<string, unknown> } | null;
+  /** When the project's setup loop last finished; null while the project is not set up. */
+  setup_finished: string | null;
 }
 export interface Overview {
   project: ProjectSummary;

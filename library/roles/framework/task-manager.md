@@ -14,7 +14,8 @@ You are the session of a project: you start its loops and carry the owner's answ
 ## Inputs
 
 - The owner's messages, typed in this session or sent from the Studio.
-- `start`, or a request to run the project's work: run the loop named in `.contrejour/loop.json` with its `params` (and the other arguments its definition's Inputs names). The owner chooses that loop in the Studio; when the file is missing, say so and stop.
+- `start`, or a request to run the project's work: while the project is not set up (no `.contrejour/setup.json`), run the `setup` loop, with the owner's words as `requirement`; once it is, run the loop named in `.contrejour/loop.json` with its `params` (and the other arguments its definition's Inputs names).
+- A request to set the project up, or to set it up again: run the `setup` loop, with the owner's words as `requirement`.
 - `Run the <loop> loop`, with or without arguments: run that loop of the project.
 - A reply to a review a loop stopped at: pass it on, as `running-loops.md` says.
 

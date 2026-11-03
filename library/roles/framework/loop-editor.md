@@ -55,7 +55,8 @@ The owner already approved the definition; only its script is out of date. Regen
 
 ### Kinds
 
-- `task`: the work the project runs, run again and again; the owner chooses one in the Studio. How a task loop is run (by whom, with which arguments, how it ends) is the project's: follow the task-loop rules in `.claude/skills/shared-references/project-rules.md` when the project has that file.
+- `task`: the work the project runs, run again and again; the owner chooses one, in `setup` or the Studio. How a task loop is run (by whom, with which arguments, how it ends) is the project's: follow the task-loop rules in `.claude/skills/shared-references/project-rules.md` when the project has that file.
+- `setup`: setting the project up; every project has the framework's, and a loop of this kind is never drafted (what is particular to a project goes in its `configure` loop, an `on-request` loop).
 - `on-request`: run when the owner asks, such as `library-contribution` or this loop.
 
 ### Script rules

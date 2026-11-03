@@ -35,6 +35,8 @@ const zh = {
   welcome:
     "说说你想要什么样的流程。我会先在本项目和流程库里找出相近的，每个都可以预览，选中的放到画布上；之后用一句话、加上画布上方块或箭头的引用，告诉我怎么改。",
   welcome_chosen: "这个项目的主任务流程是 {loop}，已经放在画布上。",
+  welcome_setup:
+    "这个项目还没有设置。画布上是它的 setup 流程：先做项目自己的配置，再选定主任务流程和参数，检查后交接。点「运行」开始，它每次需要你决定时都会在这里问你。",
   composer: "描述你想要的流程，或点画布上的方块、箭头来引用…",
   send: "发送",
   searching: "正在找相近的流程…",
@@ -115,6 +117,7 @@ const zh = {
   definition: "定义原文",
   close: "关闭",
   kind_task: "主任务",
+  kind_setup: "项目设置",
   "kind_on-request": "按需运行",
   source_project: "本项目",
   source_library: "流程库",
@@ -197,6 +200,8 @@ const en: Record<TextKey, string> = {
   welcome:
     "Say what loop you want. I first find the close ones in this project and the library; preview any of them and put the one you pick on the canvas. Then tell me what to change in a sentence, pointing at boxes or arrows on the canvas.",
   welcome_chosen: "This project's task loop is {loop}; it is on the canvas.",
+  welcome_setup:
+    "This project is not set up yet. Its setup loop is on the canvas: the project's own configuration, then the task loop and its parameters, a check and the hand-off. Press Run to start it; it asks you here whenever it needs a decision.",
   composer: "Describe the loop you want, or click a box or an arrow on the canvas to point at it…",
   send: "Send",
   searching: "Looking for close loops…",
@@ -286,6 +291,7 @@ const en: Record<TextKey, string> = {
   definition: "Definition",
   close: "Close",
   kind_task: "Task",
+  kind_setup: "Setup",
   "kind_on-request": "On request",
   source_project: "Project",
   source_library: "Library",

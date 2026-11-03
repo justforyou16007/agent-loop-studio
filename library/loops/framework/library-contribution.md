@@ -1,6 +1,6 @@
 ---
 name: library-contribution
-description: Send what this project added or changed back to the libraries it came from, once a task has finished — a plan with a judgement of each file, the owner's review of exactly that plan, then one pull request per library.
+description: Share the loops and roles this project made with other projects through the community library, when the owner decides to — a plan with a judgement of each file, the project's own check when it has one, the owner's review of exactly that plan, then the pull request.
 side: framework
 kind: on-request
 triggers: record-trajectory, guard-owner-answers
@@ -11,7 +11,7 @@ check-args: [{}]
 
 ## Purpose
 
-Experience reaches other projects through the libraries this project's loops and roles came from: the framework's, the community's and its package's. This loop sends the loops and roles this project added or changed since it was installed, each back to the library it came from (a new one any project can use, to the community's), with the owner's approval of exactly what leaves, as one pull request per library that its maintainers review. The owner runs it when they want to, any time after one submission has finished (its review ended and its result was published), and again whenever there is something new.
+Experience reaches other projects through the community library, agent-loop-community. When the owner decides to contribute, this loop sends the loops and roles this project made, the ones no library gave it, there, as one pull request that its maintainers review, with the owner's approval of exactly what leaves. Improvements to loops and roles a library gave the project are not contributions: `upstream-optimization` sends them back where they came from. The owner runs this loop when they want to, any time after one task has finished, and again whenever there is something new.
 
 ## Inputs
 
@@ -19,10 +19,11 @@ Experience reaches other projects through the libraries this project's loops and
 
 ## Steps
 
-1. **Plan** — `library-contributor` plans what would leave (`{action: "plan", exclude, notes}`): a status, the units it would send with the library each goes to and its judgement of each, what it would not send and why, the files that would leave, the defects the library check found in the result, and the plan's digest. `not-eligible`, `nothing` and `unavailable` end the loop with the reason; `no-library` goes to step 2.
-2. **Checkout** — `owner-review` asks whether to fetch a checkout of the repository this project was installed from, at the address the plan names (`review_id` `clone:<address>`). On approval `library-contributor` clones it (`{action: "clone"}`) and the loop plans again; otherwise the loop ends.
-3. **Review** — `owner-review` puts the plan to the owner (`review_id` `contribution:<digest>`): every unit with its judgement and warnings, what was left out and why, and the library check. Approval is possible only when the library check found no defect. On `revise`, the owner's words go back to step 1 as `notes`; on `cancel` the loop ends.
-4. **Contribute** — on approval, `library-contributor` sends exactly that plan (`{action: "contribute", digest, exclude}`), and the loop ends with the pull requests, one per library, or with what stood in their way.
+1. **Plan** — `library-contributor` plans what would be shared (`{action: "plan", purpose: "share", exclude, notes}`): a status, the units it would send with its judgement of each, what it would not send and why, the files that would leave, the defects the library check found in the result, whether the project's own check is required, and the plan's digest. `not-eligible`, `nothing` and `unavailable` end the loop with the reason; `no-library` goes to step 2.
+2. **Checkout** — `owner-review` asks whether to fetch a checkout of the community library from the address the plan names (`review_id` `clone:<address>`). On approval `library-contributor` clones it (`{action: "clone", purpose: "share"}`) and the loop plans again; otherwise the loop ends.
+3. **Own check** — when the plan says the project's own check is required, the child loop `contribution-check` checks exactly the files that would leave and records its verdict on the plan's digest (`{digest, files}`); its waiting result is returned as it is.
+4. **Review** — `owner-review` puts the plan to the owner (`review_id` `contribution:<digest>`): every unit with its judgement and warnings, what was left out and why, the library check, and the own check's verdict with its findings. Approval is possible only when the library check found no defect and the own check, when required, passed. On `revise`, the owner's words go back to step 1 as `notes`; on `cancel` the loop ends.
+5. **Contribute** — on approval, `library-contributor` sends exactly that plan (`{action: "contribute", purpose: "share", digest, exclude}`), and the loop ends with the pull request, or with what stood in its way.
 
 ## Bounds
 
@@ -30,7 +31,7 @@ At most 6 plans per run: the first, and one after each review or checkout.
 
 ## Waiting
 
-Steps 2 and 3 wait for the owner: the loop returns `{waiting: "owner", review_id, question, document}`, and the session runs it again with the reply in `answers`.
+Steps 2, 3 and 4 wait for the owner, step 3 in its child loop: the loop returns `{waiting: "owner", review_id, question, document}`, and the session runs it again with the reply in `answers`.
 
 ## Triggers
 

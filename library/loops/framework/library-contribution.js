@@ -1,12 +1,13 @@
 export const meta = {
   name: "library-contribution",
   description:
-    "Send what this project added or changed back to the libraries it came from, with the owner's review of exactly that plan, one pull request per library",
+    "Share the loops and roles this project made with other projects through the community library: a plan, the project's own check when it has one, the owner's review of exactly that plan, then the pull request",
   whenToUse:
     "When the owner asks, once a task has finished. Run with {}, then again with the owner's replies in answers.",
-  phases: [{ title: "Plan" }, { title: "Review" }, { title: "Contribute" }],
+  phases: [{ title: "Plan" }, { title: "Own check" }, { title: "Review" }, { title: "Contribute" }],
 };
 
+const PURPOSE = "share";
 const STRINGS = { type: "array", items: { type: "string" } };
 const PLAN = {
   type: "object",
@@ -61,6 +62,7 @@ const PLAN = {
     changes_file: { type: "string" },
     previews: STRINGS,
     library_defects: STRINGS,
+    check: { type: "string", enum: ["not-needed", "required", "passed", "failed"] },
   },
   required: [
     "status",
@@ -73,6 +75,7 @@ const PLAN = {
     "changes_file",
     "previews",
     "library_defects",
+    "check",
   ],
 };
 const REVIEW = {
@@ -146,7 +149,7 @@ let notes = "";
 for (let attempt = 1; attempt <= 6; attempt += 1) {
   // Step 1
   phase("Plan");
-  const plan = await agent(JSON.stringify({ action: "plan", exclude, notes }), {
+  const plan = await agent(JSON.stringify({ action: "plan", purpose: PURPOSE, exclude, notes }), {
     agentType: "library-contributor",
     schema: PLAN,
     phase: "Plan",
@@ -158,16 +161,16 @@ for (let attempt = 1; attempt <= 6; attempt += 1) {
     // Step 2
     const id = `clone:${plan.upstream}`;
     const decided = await review(id, {
-      subject: "a checkout of the library's repository",
+      subject: "a checkout of the community library",
       request:
-        "This project has no checkout of the library's repository, which a contribution needs. Fetch one from the address below?",
+        "This project has no checkout of the community library, which sharing needs. Fetch one from the address below?",
       materials: { upstream: plan.upstream, reason: plan.reason },
       approvable: true,
     });
     if (decided.decision === "ask") return waiting(id, decided);
     if (decided.decision !== "approve")
       return { contributed: false, reason: "the owner did not have a checkout fetched" };
-    const cloned = await agent(JSON.stringify({ action: "clone" }), {
+    const cloned = await agent(JSON.stringify({ action: "clone", purpose: PURPOSE }), {
       agentType: "library-contributor",
       schema: CLONED,
       phase: "Plan",
@@ -176,29 +179,44 @@ for (let attempt = 1; attempt <= 6; attempt += 1) {
     notes = "";
     continue;
   }
-  // Step 3
+  // Step 3: the project's own check, when its rules ask for one, on exactly these files.
+  let own = { verdict: "not-needed", findings: [] };
+  if (plan.check === "required" || plan.check === "failed") {
+    phase("Own check");
+    const checked = await workflow("contribution-check", {
+      digest: plan.digest,
+      files: plan.previews,
+      answers,
+    });
+    if (checked && checked.waiting) return checked;
+    own = checked || { verdict: "fail", findings: ["the check did not finish"] };
+  } else if (plan.check === "passed") own = { verdict: "pass", findings: [] };
+  // Step 4
+  phase("Review");
   const id = `contribution:${plan.digest}`;
-  const approvable = plan.library_defects.length === 0;
+  const approvable =
+    plan.library_defects.length === 0 && (own.verdict === "pass" || own.verdict === "not-needed");
   const decided = await review(id, {
-    subject: "a contribution to the shared library",
+    subject: "a contribution to the community library",
     request:
-      "Approve sending exactly these loops and roles back to the libraries named for each, one pull request per library, or say what to leave out or change.",
+      "Approve sharing exactly these loops and roles with other projects through the community library, as a pull request, or say what to leave out or change.",
     materials: {
       units: plan.units,
       not_selected: plan.not_selected,
       changes_file: plan.changes_file,
       previews: plan.previews,
       library_defects: plan.library_defects,
+      own_check: own,
     },
     approvable,
   });
   if (decided.decision === "ask") return waiting(id, decided);
   if (decided.decision === "cancel") return { contributed: false, reason: "the owner cancelled" };
   if (decided.decision === "approve" && approvable) {
-    // Step 4
+    // Step 5
     phase("Contribute");
     const sent = await agent(
-      JSON.stringify({ action: "contribute", digest: plan.digest, exclude }),
+      JSON.stringify({ action: "contribute", purpose: PURPOSE, digest: plan.digest, exclude }),
       {
         agentType: "library-contributor",
         schema: SENT,
@@ -211,4 +229,4 @@ for (let attempt = 1; attempt <= 6; attempt += 1) {
 }
 return { contributed: false, reason: "no plan was approved within 6 rounds" };
 
-// contrejour-loop-definition-sha256: f7f3b9309b67a506fbb060fdef0bd51e827e24262179d583872c3b085a4fef18
+// contrejour-loop-definition-sha256: f1b2d4c7dd37f062ddb49c82b18baf1b3ac46eedf84a9c277681748d9ccd7e76

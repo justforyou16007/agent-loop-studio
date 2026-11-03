@@ -1,18 +1,18 @@
 #!/usr/bin/env node
 /**
- * The library-contributor role's tool. A project sends what it added or changed
- * back to the libraries it came from as pull requests, once at least one of its
- * tasks has finished. The installer keeps a copy of every file it seeded in
- * `.contrejour/seeded/`: against that baseline, a file the project left alone is
- * never sent, however far the library has moved on, so a contribution cannot undo
- * anyone else's work. `plan` lists what would leave, and where, and binds it to a
- * digest, which `contribute` requires, so what leaves is what the owner approved.
+ * The library-contributor role's tool, for two purposes. Sharing
+ * (`library-contribution`, when the owner decides to) sends the loops and roles
+ * this project made to the community library. Sending upstream
+ * (`upstream-optimization`) returns the project's improvements to loops and roles
+ * a library gave it, its fixed roles above all, to that library: the framework's,
+ * the community's or the project package's own. Either leaves only once at least
+ * one of the project's tasks has finished.
  *
- * A project package carries the framework's library and the community's as
- * submodules next to its own. Each loop or role goes back to the library it came
- * from; a new one goes to the library of its side, except that one any project can
- * use goes to the community's, since the framework's holds only its own base loops
- * and roles. One review covers everything that leaves; each library gets its own
+ * The installer keeps a copy of every file it seeded in `.contrejour/seeded/`:
+ * against that baseline, a file the project left alone is never sent, however far
+ * the library has moved on, so nothing sent can undo anyone else's work. `plan`
+ * lists what would leave, and where, and binds it to a digest, which `contribute`
+ * requires, so what leaves is what the owner approved; each library gets its own
  * pull request.
  */
 import crypto from "node:crypto";
@@ -75,8 +75,21 @@ type State =
   /** Not sent: it holds a key, a token, a hidden path or an injection pattern. */
   | "blocked"
   /** Not sent: the owner left it out. */
-  | "excluded";
+  | "excluded"
+  /** Not shared: it came from a library, so an improvement of it goes back there (upstream-optimization). */
+  | "improvement"
+  /** Not sent upstream: no library gave it to this project, so it is shared (library-contribution). */
+  | "contribution";
 const SENDABLE: readonly State[] = ["new", "changed", "merged"];
+
+/**
+ * What a plan is for. `share`: the loops and roles this project made, for the
+ * community library, when the owner decides to contribute (library-contribution).
+ * `upstream`: the improvements this project made to loops and roles a library gave
+ * it, back to that library (upstream-optimization).
+ */
+type Purpose = "share" | "upstream";
+const PURPOSES: readonly Purpose[] = ["share", "upstream"];
 
 interface PlanFile {
   source: string;
@@ -110,10 +123,11 @@ type LibraryView = ResolvedView | { available: false; reason: string; upstream: 
 interface PublicPlan {
   project: string;
   side: Role;
+  purpose: Purpose;
   /** At least one task finished, as the project counts them (a run of its task loop, unless it says otherwise). */
   eligible: boolean;
   finished_tasks: string[];
-  /** The checkout this project was installed from (or the clone made for it). */
+  /** The library this plan sends to: the community's to share, the installed checkout's to send upstream. */
   library: LibraryView;
   /** Every library a unit can go to: that checkout's, then the framework's and the community's it carries. */
   libraries: ResolvedView[];
@@ -184,6 +198,10 @@ const clonePath = (root: string): string => path.join(contributionsDir(root), "l
 /** The framework's library and the community's, as a project package carries them. */
 const FRAMEWORK_LIBRARY = "agent-loop-studio";
 const COMMUNITY_LIBRARY = "agent-loop-community";
+/** Where the community library is, for a project whose checkout does not carry it. */
+const COMMUNITY_URL = "https://github.com/justforyou16007/agent-loop-community.git";
+const communityClonePath = (root: string): string =>
+  path.join(contributionsDir(root), "community-checkout");
 const logPath = (root: string): string => path.join(contributionsDir(root), "log.json");
 const checkPath = (root: string): string => path.join(contributionsDir(root), "check.json");
 const previewDir = (root: string): string => path.join(contributionsDir(root), "preview");
@@ -245,17 +263,26 @@ function checkoutOf(root: string): string | null {
  * community's, which a project package's checkout carries as submodules.
  */
 function checkoutsOf(root: string): { name: string; checkout: string }[] {
+  const found: { name: string; checkout: string }[] = [];
   const main = checkoutOf(root);
-  if (!main) return [];
-  const remote = git(main, "config", "--get", "remote.origin.url").stdout.trim();
-  const found = [
-    { name: (remote && githubRepo(remote)?.name) || path.basename(main), checkout: main },
-  ];
-  for (const name of [FRAMEWORK_LIBRARY, COMMUNITY_LIBRARY]) {
-    const checkout = path.join(main, name);
-    if (fs.existsSync(path.join(checkout, "library")) && isOwnRepository(checkout))
-      found.push({ name, checkout });
+  if (main) {
+    const remote = git(main, "config", "--get", "remote.origin.url").stdout.trim();
+    found.push({
+      name: (remote && githubRepo(remote)?.name) || path.basename(main),
+      checkout: main,
+    });
+    for (const name of [FRAMEWORK_LIBRARY, COMMUNITY_LIBRARY]) {
+      const checkout = path.join(main, name);
+      if (fs.existsSync(path.join(checkout, "library")) && isOwnRepository(checkout))
+        found.push({ name, checkout });
+    }
   }
+  // A project whose checkout carries no community library may have fetched one to share with.
+  if (
+    !found.some((entry) => entry.name === COMMUNITY_LIBRARY) &&
+    isOwnRepository(communityClonePath(root))
+  )
+    found.push({ name: COMMUNITY_LIBRARY, checkout: communityClonePath(root) });
   return found;
 }
 
@@ -430,6 +457,7 @@ interface Classified extends PlanUnit {
 interface PlanContext {
   root: string;
   side: Role;
+  purpose: Purpose;
   /** The library sides this project receives, `framework` first. */
   sides: string[];
   /** The libraries a unit can go to, the checkout the project was installed from first. */
@@ -455,25 +483,47 @@ function sidesAt(library: LibrarySource, directory: string): string[] {
 }
 
 /**
- * Where a unit goes: back to the library it came from, the first holding its
- * file. A new one goes to the library of its side; one any project can use
- * (`framework`) goes to the community's when the project has it, since the
- * framework's own library holds only the framework's base loops and roles, and so
- * does one of a side no library holds yet.
+ * Where a unit goes for this plan's purpose, or why it does not go. A loop or role
+ * a library gave this project (it holds the file, and the project kept a baseline
+ * of it) is improved, never contributed: sending upstream returns it to that
+ * library. One the project made is contributed, never sent upstream: sharing sends
+ * it to the community library.
  */
-function destinationOf(context: PlanContext, targets: string[], side: string): LibrarySource {
+function routeOf(
+  context: PlanContext,
+  kind: "loop" | "role",
+  targets: string[],
+  received: boolean,
+): { library: LibrarySource } | { state: State; reason: string; library: string | null } {
   const { libraries } = context;
-  const holding = libraries.find((library) =>
-    targets.some((target) => showAtBase(library, target) !== null),
-  );
-  if (holding) return holding;
-  const community = libraries.find((library) => library.name === COMMUNITY_LIBRARY);
-  if (side === "framework" && community) return community;
-  const home = libraries.find(
-    (library) =>
-      sidesAt(library, "roles").includes(side) || sidesAt(library, "loops").includes(side),
-  );
-  return home ?? community ?? libraries[0]!;
+  const origin =
+    libraries.find((library) => targets.some((target) => showAtBase(library, target) !== null)) ??
+    null;
+  const given = origin !== null && received;
+  if (context.purpose === "upstream") {
+    if (given) return { library: origin };
+    return {
+      state: "contribution",
+      library: null,
+      reason: received
+        ? "no library holds it any more, or it came from a reference project: library-contribution shares it with the community library"
+        : "this project made it: library-contribution shares it with the community library",
+    };
+  }
+  if (given)
+    return {
+      state: "improvement",
+      library: origin.name,
+      reason: `it came from ${origin.name}: upstream-optimization sends an improvement of it back there`,
+    };
+  const community = libraries.find((library) => library.name === COMMUNITY_LIBRARY)!;
+  if (origin && origin !== community)
+    return {
+      state: "conflict",
+      library: community.name,
+      reason: `${origin.name} already has a ${kind} of this name: rename this one to share it`,
+    };
+  return { library: community };
 }
 
 /**
@@ -532,7 +582,11 @@ function classifyRole(context: PlanContext, name: string): Classified {
       reason: `it serves the ${fields.side} side, and this ${side} project receives ${context.sides.join(" and ")}`,
     };
   const target = `library/roles/${fields.side}/${name}.md`;
-  const library = destinationOf(context, [target], fields.side);
+  const received = base !== null || context.seeded.has(source);
+  const route = routeOf(context, "role", [target], received);
+  if (!("library" in route) || !(typeof route.library === "object" && route.library !== null))
+    return { ...unit, ...(route as { state: State; reason: string; library: string | null }) };
+  const { library } = route as { library: LibrarySource };
   const taken = nameTakenElsewhere(context, library, "roles", fields.side, `${name}.md`);
   if (taken)
     return {
@@ -543,7 +597,15 @@ function classifyRole(context: PlanContext, name: string): Classified {
     };
   const theirs = showAtBase(library, target);
   const sent = context.sent.get(target) ?? new Set<string>();
-  const verdict = compare(ours, base, theirs, sent, context.seeded.has(source));
+  // Shared, it is new to the community library: what the project started from does not count.
+  const upstream = context.purpose === "upstream";
+  const verdict = compare(
+    ours,
+    upstream ? base : null,
+    theirs,
+    sent,
+    upstream && context.seeded.has(source),
+  );
   let final = ours;
   let state: State;
   let reason = verdict.reason;
@@ -612,11 +674,20 @@ async function classifyLoop(context: PlanContext, name: string): Promise<Classif
         ...report.defects,
       ].join("; ")}`,
     };
-  const library = destinationOf(
+  const received =
+    baseDefinition !== null ||
+    context.seeded.has(definitionSource) ||
+    context.seeded.has(scriptSource);
+  const route = routeOf(
     context,
+    "loop",
     ["md", "js"].map((ext) => `library/loops/${fields.side}/${name}.${ext}`),
-    fields.side!,
+    received,
   );
+  if (!(typeof route.library === "object" && route.library !== null))
+    return { ...unit, ...(route as { state: State; reason: string; library: string | null }) };
+  const { library } = route as { library: LibrarySource };
+  const upstream = context.purpose === "upstream";
   const pairs = [
     { source: definitionSource, ours: definition, base: baseDefinition, ext: "md" },
     { source: scriptSource, ours: script ?? "", base: baseScript, ext: "js" },
@@ -624,13 +695,13 @@ async function classifyLoop(context: PlanContext, name: string): Promise<Classif
     const target = `library/loops/${fields.side}/${name}.${pair.ext}`;
     const theirs = showAtBase(library, target);
     const sent = context.sent.get(target) ?? new Set<string>();
-    const seeded = context.seeded.has(pair.source);
+    const seeded = upstream && context.seeded.has(pair.source);
     return {
       ...pair,
       target,
       theirs,
       sent,
-      verdict: compare(pair.ours, pair.base, theirs, sent, seeded),
+      verdict: compare(pair.ours, upstream ? pair.base : null, theirs, sent, seeded),
     };
   });
   const files = pairs.map((pair) => ({
@@ -884,8 +955,32 @@ function checkState(root: string, side: Role, digest: string | null): PublicPlan
   return recorded.verdict === "pass" ? "passed" : "failed";
 }
 
+/** Why this purpose has no library to send to yet, and where a checkout could come from; null when it has one. */
+function missingLibrary(
+  root: string,
+  purpose: Purpose,
+  checkouts: { name: string; checkout: string }[],
+): { reason: string; upstream: string | null } | null {
+  if (purpose === "share") {
+    if (checkouts.some((entry) => entry.name === COMMUNITY_LIBRARY)) return null;
+    return {
+      reason: `no checkout of the community library is recorded for this project: \`library-cli.js clone --purpose share\` fetches one from ${COMMUNITY_URL}`,
+      upstream: COMMUNITY_URL,
+    };
+  }
+  if (checkoutOf(root)) return null;
+  const upstream = upstreamUrl(root);
+  return {
+    reason: `no checkout of the repository this project was installed from is recorded${
+      upstream ? `: \`library-cli.js clone --purpose upstream\` fetches one from ${upstream}` : ""
+    }`,
+    upstream,
+  };
+}
+
 async function makePlan(
   root: string,
+  purpose: Purpose,
   exclude: string[],
 ): Promise<{ plan: PublicPlan; selected: Classified[]; libraries: LibrarySource[] }> {
   const side = installedRole(root);
@@ -893,22 +988,17 @@ async function makePlan(
   const shared = {
     project: projectSlug(root),
     side,
+    purpose,
     eligible: finished.length > 0,
     finished_tasks: finished,
   };
   const checkouts = checkoutsOf(root);
-  if (!checkouts.length) {
-    const upstream = upstreamUrl(root);
+  const missing = missingLibrary(root, purpose, checkouts);
+  if (missing) {
     return {
       plan: {
         ...shared,
-        library: {
-          available: false,
-          reason: `no checkout of the repository this project was installed from is recorded${
-            upstream ? `: \`library-cli.js clone\` fetches one from ${upstream}` : ""
-          }`,
-          upstream,
-        },
+        library: { available: false, ...missing },
         libraries: [],
         selected: [],
         not_selected: [],
@@ -927,6 +1017,7 @@ async function makePlan(
   const context: PlanContext = {
     root,
     side,
+    purpose,
     sides: sidesOf(root),
     libraries,
     sent: sentHashes(root),
@@ -973,7 +1064,7 @@ async function makePlan(
       })),
     )
     .sort((a, b) => `${a.library}/${a.target}`.localeCompare(`${b.library}/${b.target}`));
-  const digest = leaving.length ? sha256(JSON.stringify(leaving)) : null;
+  const digest = leaving.length ? sha256(JSON.stringify({ purpose, leaving })) : null;
   const changesFile = writePreview(root, selected);
   const present = (unit: Classified): PlanUnit => {
     const { finals: _finals, before: _before, ...shown } = unit;
@@ -991,7 +1082,11 @@ async function makePlan(
   return {
     plan: {
       ...shared,
-      library: view(libraries[0]!),
+      library: view(
+        purpose === "share"
+          ? libraries.find((library) => library.name === COMMUNITY_LIBRARY)!
+          : libraries[0]!,
+      ),
       libraries: libraries.map(view),
       selected: selected.map(present),
       not_selected: units
@@ -1037,20 +1132,33 @@ function recordCheck(
   return { digest, verdict };
 }
 
-function cloneLibrary(root: string): { checkout: string; cloned: boolean } {
-  const existing = checkoutOf(root);
-  if (existing) return { checkout: existing, cloned: false };
-  const upstream = upstreamUrl(root);
+function cloneLibrary(root: string, purpose: Purpose): { checkout: string; cloned: boolean } {
+  const checkouts = checkoutsOf(root);
+  if (!missingLibrary(root, purpose, checkouts)) {
+    const known =
+      purpose === "share"
+        ? checkouts.find((entry) => entry.name === COMMUNITY_LIBRARY)!
+        : checkouts[0]!;
+    return { checkout: known.checkout, cloned: false };
+  }
+  // Sharing needs the community library; sending upstream, the repository this project came from,
+  // with the framework's and the community's libraries a project package carries as submodules.
+  const upstream = purpose === "share" ? COMMUNITY_URL : upstreamUrl(root);
   if (!upstream)
     failA1(
       "LIBRARY_UNAVAILABLE",
       "this release names no repository: install from a local checkout, or run the installer with --library",
     );
-  const target = clonePath(root);
+  const target = purpose === "share" ? communityClonePath(root) : clonePath(root);
   fs.rmSync(target, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  // A project package's checkout carries the framework's and the community's libraries as submodules.
-  const cloned = run("git", ["clone", "--quiet", "--recurse-submodules", upstream, target]);
+  const cloned = run("git", [
+    "clone",
+    "--quiet",
+    ...(purpose === "share" ? [] : ["--recurse-submodules"]),
+    upstream,
+    target,
+  ]);
   if (!cloned.ok) failA1("LIBRARY_UNAVAILABLE", `could not clone ${upstream}: ${cloned.stderr}`);
   return { checkout: target, cloned: true };
 }
@@ -1187,26 +1295,32 @@ function pushAndOpen(
 function pullRequestText(plan: PublicPlan, units: PlanUnit[]): { title: string; body: string } {
   const added = units.filter((unit) => unit.state === "new").length;
   const changed = units.length - added;
-  const title = `library: ${plan.project} (${plan.side}): ${[
-    ...(added ? [`${added} new`] : []),
-    ...(changed ? [`${changed} changed`] : []),
-  ].join(", ")}`;
+  const counts = [...(added ? [`${added} new`] : []), ...(changed ? [`${changed} changed`] : [])];
   const rows = units.map(
     (unit) =>
       `| ${unit.kind} | \`${unit.name}\` | ${unit.side} | ${unit.state} | ${unit.description.replace(/\|/g, "\\|")} |`,
   );
+  const checked = `\`library-cli.js\` ran the loop and role checks on the resulting library and found no key or token of the project in these files.${
+    plan.check === "passed"
+      ? " The project's own check of what leaves passed exactly this text."
+      : ""
+  }`;
+  const upstream = plan.purpose === "upstream";
+  const title = upstream
+    ? `upstream: ${plan.project} (${plan.side}): ${changed} improved`
+    : `library: ${plan.project} (${plan.side}): ${counts.join(", ")}`;
   const body = [
-    `Contributed from a ${plan.side} project after ${plan.finished_tasks.length} finished task(s), through the \`library-contributor\` role, with the owner's approval.`,
+    upstream
+      ? `Improvements a ${plan.side} project made to loops and roles this library gave it, after ${plan.finished_tasks.length} finished task(s), through \`upstream-optimization\`, with the owner's approval.`
+      : `Shared by a ${plan.side} project after ${plan.finished_tasks.length} finished task(s): loops and roles it made, for other projects to use, through \`library-contribution\`, with the owner's approval.`,
     "",
     "| Kind | Name | Side | Change | What it is |",
     "| --- | --- | --- | --- | --- |",
     ...rows,
     "",
-    `This holds only what the project added or changed since it was installed; what the library changed meanwhile is untouched. \`library-cli.js\` ran the loop and role checks on the resulting library and found no key or token of the project in these files.${
-      plan.check === "passed"
-        ? " The project's own check of what leaves passed exactly this text."
-        : ""
-    }`,
+    upstream
+      ? `Each holds only what the project changed since it got it, merged with what changed here meanwhile; nothing else here is touched. ${checked}`
+      : `Nothing here is changed by it. ${checked}`,
     "",
   ].join("\n");
   return { title, body };
@@ -1229,7 +1343,7 @@ async function sendTo(
 ): Promise<Sent> {
   const files = units.flatMap((unit) => unit.files);
   const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  const stem = `library/${plan.project}-${plan.side}-${stamp}`;
+  const stem = `${plan.purpose === "upstream" ? "upstream" : "library"}/${plan.project}-${plan.side}-${stamp}`;
   const taken = (name: string) =>
     git(library.checkout, "rev-parse", "--verify", "--quiet", `refs/heads/${name}`).ok ||
     (library.remote !== null &&
@@ -1285,6 +1399,7 @@ async function sendTo(
         ...contributions,
         {
           at: new Date().toISOString(),
+          purpose: plan.purpose,
           library: library.name,
           branch,
           base: library.branch,
@@ -1307,6 +1422,7 @@ async function sendTo(
 
 async function contribute(
   root: string,
+  purpose: Purpose,
   digest: string,
   exclude: string[],
 ): Promise<{
@@ -1315,7 +1431,7 @@ async function contribute(
   pull_requests: Sent[];
   files: string[];
 }> {
-  const { plan, selected, libraries } = await makePlan(root, exclude);
+  const { plan, selected, libraries } = await makePlan(root, purpose, exclude);
   if (!plan.library.available || !libraries.length)
     failA1("LIBRARY_UNAVAILABLE", plan.library.available ? "" : plan.library.reason);
   if (!plan.eligible)
@@ -1323,7 +1439,13 @@ async function contribute(
       "NO_FINISHED_TASK",
       "a project contributes once at least one task has finished: one submission whose review ended and whose result was published",
     );
-  if (!plan.digest) failA1("NOTHING_TO_CONTRIBUTE", "this project has nothing new to send");
+  if (!plan.digest)
+    failA1(
+      "NOTHING_TO_CONTRIBUTE",
+      purpose === "share"
+        ? "this project made nothing new to share"
+        : "this project improved nothing a library gave it",
+    );
   if (digest !== plan.digest)
     failA1(
       "PLAN_CHANGED",
@@ -1339,7 +1461,7 @@ async function contribute(
   if (plan.check === "failed")
     failA1("CHECK_FAILED", "the project's check found something in these files that may not leave");
 
-  // One pull request for each library this contribution reaches.
+  // One pull request for each library this plan reaches: the community's alone when sharing.
   const sent: Sent[] = [];
   for (const library of libraries) {
     const units = selected.filter((unit) => unit.library === library.name);
@@ -1392,24 +1514,44 @@ function cli(): void {
       process.exitCode = 1;
     }
   };
+  const purposeOf = (value: string | undefined): Purpose => {
+    const purpose = (value ?? "share") as Purpose;
+    if (!PURPOSES.includes(purpose))
+      failA1(
+        "INVALID_VALUE",
+        "--purpose is share (to the community library) or upstream (back to where it came from)",
+      );
+    return purpose;
+  };
+  const PURPOSE_HELP =
+    "share: what this project made, to the community library (the default); upstream: its improvements to what a library gave it, back to that library";
   program
     .command("plan")
-    .description("List what this project could contribute, with the digest contribute requires")
+    .description("List what would leave for this purpose, with the digest contribute requires")
     .requiredOption("--project <dir>")
+    .option("--purpose <purpose>", PURPOSE_HELP)
     .option("--exclude <names>", "comma-separated loops and roles the owner leaves out")
-    .action((options: { project: string; exclude?: string }) =>
+    .action((options: { project: string; purpose?: string; exclude?: string }) =>
       action(
-        async () => (await makePlan(path.resolve(options.project), names(options.exclude))).plan,
+        async () =>
+          (
+            await makePlan(
+              path.resolve(options.project),
+              purposeOf(options.purpose),
+              names(options.exclude),
+            )
+          ).plan,
       )(),
     );
   program
     .command("clone")
     .description(
-      "Fetch a checkout of the repository this project was installed from, for a project without one",
+      "Fetch the checkout a purpose needs: the community library to share, the repository this project came from to send upstream",
     )
     .requiredOption("--project <dir>")
-    .action((options: { project: string }) =>
-      action(() => cloneLibrary(path.resolve(options.project)))(),
+    .option("--purpose <purpose>", PURPOSE_HELP)
+    .action((options: { project: string; purpose?: string }) =>
+      action(() => cloneLibrary(path.resolve(options.project), purposeOf(options.purpose)))(),
     );
   program
     .command("record-check")
@@ -1434,11 +1576,17 @@ function cli(): void {
       "Send exactly what the plan with this digest lists, as one pull request per library",
     )
     .requiredOption("--project <dir>")
+    .option("--purpose <purpose>", PURPOSE_HELP)
     .requiredOption("--digest <sha256>", "the digest of the plan the owner approved")
     .option("--exclude <names>", "the same list the plan was made with")
-    .action((options: { project: string; digest: string; exclude?: string }) =>
+    .action((options: { project: string; purpose?: string; digest: string; exclude?: string }) =>
       action(() =>
-        contribute(path.resolve(options.project), options.digest, names(options.exclude)),
+        contribute(
+          path.resolve(options.project),
+          purposeOf(options.purpose),
+          options.digest,
+          names(options.exclude),
+        ),
       )(),
     );
   runCli(program);

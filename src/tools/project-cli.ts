@@ -2,16 +2,33 @@
 /**
  * The project's settings from a terminal, for what the Studio otherwise does:
  * register the hooks (the installer runs it), make a loop the project's task
- * loop with its parameter values, and show what the project runs.
+ * loop with its parameter values, record that its setup finished (the setup
+ * loop's hand-off does), and show what the project runs.
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createCli, runCli } from "../lib/cli.js";
 import { entryRoleOf, installedRole } from "./installation.js";
-import { readSelectedLoop } from "./loops.js";
+import { readSelectedLoop, setupFinishedAt, setupFinishedPath } from "./loops.js";
 import { useLoop } from "./project-loop.js";
 import { readManifest } from "./project-manifest.js";
 import { entryRole, writeEntryRole } from "./project-settings.js";
+import { writeStateJsonAtomic } from "./state-file.js";
+import { failA1 } from "./validate.js";
+
+/** The project is set up once its setup loop handed off, with a task loop chosen. */
+function finishSetup(projectRoot: string): { finished_at: string; loop: string } {
+  const root = path.resolve(projectRoot);
+  let loop: string;
+  try {
+    loop = readSelectedLoop(root).loop;
+  } catch {
+    failA1("LOOP_NOT_SELECTED", "a project is set up once it has a task loop: choose one first");
+  }
+  const finished = { finished_at: new Date().toISOString(), loop };
+  writeStateJsonAtomic(setupFinishedPath(root), { schema_version: 1, ...finished });
+  return finished;
+}
 
 /** `name=value`: the value read as JSON when it is JSON (a number, true), else as text. */
 function parameter(text: string): [string, unknown] {
@@ -59,6 +76,11 @@ function cli(): void {
       ),
     );
   program
+    .command("finish-setup")
+    .description("Record that this project's setup finished (the setup loop's hand-off runs it)")
+    .requiredOption("--project <dir>")
+    .action((options: { project: string }) => print(finishSetup(options.project)));
+  program
     .command("show")
     .description("What this project is installed as and the loop it runs")
     .requiredOption("--project <dir>")
@@ -76,6 +98,7 @@ function cli(): void {
         entry_role: entryRoleOf(root),
         session_role: entryRole(root),
         loop: chosen,
+        setup_finished: setupFinishedAt(root),
       });
     });
   runCli(program);

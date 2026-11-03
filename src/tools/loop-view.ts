@@ -27,6 +27,7 @@ import {
   parseTriggers,
   rolesDir,
   selectedLoopPath,
+  setupFinishedAt,
 } from "./loops.js";
 import { isRecord } from "./validate.js";
 
@@ -94,6 +95,8 @@ export interface ViewData {
     library: string | null;
     language: "zh" | "en";
     chosen: { loop: string; params: Record<string, unknown> } | null;
+    /** When the project's setup loop last finished; null while the project is not set up. */
+    setup_finished: string | null;
     generated_at: string;
     /** Served by the helper, so the page can reload it; false in a written snapshot. */
     live: boolean;
@@ -471,6 +474,7 @@ export async function collectView(projectRoot: string, live = false): Promise<Vi
       library,
       language: projectLanguage(root),
       chosen,
+      setup_finished: setupFinishedAt(root),
       generated_at: new Date().toISOString(),
       live,
     },
@@ -620,6 +624,7 @@ export function fingerprint(root: string): string {
     path.join(root, ".contrejour", "trajectories", "index.jsonl"),
     path.join(root, ".contrejour", "install.json"),
     path.join(root, "task.md"),
+    path.join(root, ".contrejour", "setup.json"),
   ];
   for (const dir of dirs)
     if (fs.existsSync(dir))
@@ -752,7 +757,7 @@ h1{font-size:22px;margin:0;font-family:var(--mono);font-weight:600}
 .title-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px}
 .lead{color:var(--muted);margin:8px 0 16px;max-width:80ch}
 .badge{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:550;padding:1px 8px;border-radius:999px;border:1px solid var(--border);color:var(--muted);background:var(--surface);white-space:nowrap}
-.badge.kind-task{color:var(--task);background:var(--task-soft);border-color:transparent}.badge.kind-on-request{color:var(--request);background:var(--request-soft);border-color:transparent}
+.badge.kind-task{color:var(--task);background:var(--task-soft);border-color:transparent}.badge.kind-setup{color:var(--loop);background:var(--loop-soft);border-color:transparent}.badge.kind-on-request{color:var(--request);background:var(--request-soft);border-color:transparent}
 .badge.ok{color:var(--ok)}.badge.stale{color:var(--warn);background:var(--warn-soft);border-color:transparent}.badge.bad{color:var(--bad);background:var(--bad-soft);border-color:transparent}
 .badge.chosen{color:var(--warn);background:var(--warn-soft);border-color:transparent}.badge.wait{color:var(--warn);background:var(--warn-soft);border-color:transparent}
 .pill{font-size:12.5px;padding:2px 10px;border-radius:999px;background:var(--task-soft);color:var(--task)}.pill.muted{background:var(--sunken);color:var(--muted)}

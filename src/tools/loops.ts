@@ -179,10 +179,12 @@ export const parameterDefaults = (parameters: LoopParameter[]): Record<string, u
 
 /**
  * What a loop is for: `task`, the work a project runs again and again (the owner
- * chooses one, the project's entry role runs it); `on-request`, work the owner
- * asks for. A definition without `kind` is a task loop.
+ * chooses one, the project's entry role runs it); `setup`, setting the project up,
+ * which every project has from the framework (its `configure` step is the part a
+ * package's side may replace); `on-request`, work the owner asks for. A
+ * definition without `kind` is a task loop.
  */
-export const LOOP_KINDS = ["task", "on-request"] as const;
+export const LOOP_KINDS = ["task", "setup", "on-request"] as const;
 export function loopKind(root: string, name: string): string {
   const file = loopDefinitionPath(root, name);
   return fs.existsSync(file) ? (frontmatter(fs.readFileSync(file, "utf8")).kind ?? "task") : "task";
@@ -201,6 +203,22 @@ export interface SelectedLoop {
 }
 export const selectedLoopPath = (root: string): string =>
   path.join(path.resolve(root), ".contrejour", "loop.json");
+/** Written when the project's setup loop handed off: until then, the project is not set up. */
+export const setupFinishedPath = (root: string): string =>
+  path.join(path.resolve(root), ".contrejour", "setup.json");
+/** When the project's setup last finished, or null while it never has. */
+export function setupFinishedAt(root: string): string | null {
+  try {
+    const recorded: unknown = JSON.parse(fs.readFileSync(setupFinishedPath(root), "utf8"));
+    const at =
+      recorded && typeof recorded === "object"
+        ? (recorded as { finished_at?: unknown }).finished_at
+        : null;
+    return typeof at === "string" ? at : null;
+  } catch {
+    return null;
+  }
+}
 export function readSelectedLoop(root: string): SelectedLoop {
   const file = selectedLoopPath(root);
   if (!fs.existsSync(file))

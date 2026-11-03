@@ -137,6 +137,13 @@ export function App() {
           setStatus(open);
         })
         .catch(() => undefined);
+      // A project not set up yet opens with its setup loop, which the framework gives every project.
+      const setup = data.loops.find((loop) => loop.kind === "setup" && loop.source === "project");
+      if (!data.project.setup_finished && setup) {
+        say({ from: "studio", key: "welcome_setup" });
+        void open({ name: setup.name, source: "project" }, true);
+        return;
+      }
       const chosen = data.project.chosen?.loop;
       if (chosen && data.loops.some((loop) => loop.name === chosen && loop.source === "project")) {
         say({ from: "studio", key: "welcome_chosen", values: { loop: chosen } });

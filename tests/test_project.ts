@@ -58,12 +58,17 @@ try {
   assert.equal(read(path.join(plain, ".contrejour/project.json")).name, "agent-loop-studio");
   for (const role of ["task-manager", "project-memory", "owner-review", "loop-editor", "trajectory-optimizer"])
     assert.ok(fs.existsSync(path.join(plain, ".claude/agents", `${role}.md`)), role);
-  for (const loop of ["loop-authoring", "role-authoring", "library-contribution"])
+  for (const loop of ["setup", "configure", "loop-authoring", "role-authoring", "library-contribution", "upstream-optimization", "contribution-check"])
     assert.ok(fs.existsSync(path.join(plain, ".claude/loops", `${loop}.md`)), loop);
+  assert.ok(fs.existsSync(path.join(plain, ".claude/agents/project-setup.md")));
   assert.ok(read(path.join(plain, ".claude/settings.json")).hooks.PreToolUse, "the hooks guard every loop from the start");
   assert.equal(read(path.join(plain, ".claude/settings.json")).agent, "task-manager", "every session runs as the entry role from the start");
-  const shown = JSON.parse(execFileSync(process.execPath, [path.join(plain, ".contrejour/dist/tools/project-cli.js"), "show", "--project", plain], { encoding: "utf8" }));
-  assert.deepEqual([shown.profile, shown.entry_role, shown.loop], ["default", "task-manager", null]);
+  const projectCli = (root: string, ...args: string[]) =>
+    spawnSync(process.execPath, [path.join(root, ".contrejour/dist/tools/project-cli.js"), ...args, "--project", root], { encoding: "utf8" });
+  const shown = JSON.parse(projectCli(plain, "show").stdout);
+  assert.deepEqual([shown.profile, shown.entry_role, shown.loop, shown.setup_finished], ["default", "task-manager", null, null]);
+  // A project is set up once its setup hands off, which needs a task loop.
+  assert.match(projectCli(plain, "finish-setup").stderr, /LOOP_NOT_SELECTED/);
   const refused = spawnSync(process.execPath, [installer, "--role", "worker", "--project", path.join(sandbox, "nope")], { encoding: "utf8" });
   assert.notEqual(refused.status, 0);
   assert.match(refused.stderr, /--role default/);
@@ -102,6 +107,9 @@ try {
     }
     const overview = JSON.parse((await request(at("api/overview"), { cookie })).body);
     assert.equal(overview.project.name, "first");
+    // Not set up yet: the page opens it with its setup loop, the framework's.
+    assert.equal(overview.project.setup_finished, null);
+    assert.equal(overview.loops.find((loop: { name: string }) => loop.name === "setup").kind, "setup");
     const flow = JSON.parse((await request(at("api/flow?name=iterate-and-check&source=project"), { cookie })).body);
     assert.deepEqual(
       flow.nodes.filter((node: { kind: string }) => node.kind === "step").map((node: { title: string }) => node.title),
@@ -161,8 +169,8 @@ try {
   assert.ok(fs.existsSync(path.join(first, ".contrejour/reviews/answers/result-1.json")));
 
   // --- a contribution waits for a finished task: a run of the task loop, without a project extension ---
-  const plan = (root: string) =>
-    JSON.parse(spawnSync(process.execPath, [path.join(root, ".contrejour/dist/tools/library-cli.js"), "plan", "--project", root], { encoding: "utf8" }).stdout);
+  const plan = (root: string, ...args: string[]) =>
+    JSON.parse(spawnSync(process.execPath, [path.join(root, ".contrejour/dist/tools/library-cli.js"), "plan", "--project", root, ...args], { encoding: "utf8" }).stdout);
   assert.equal(plan(plain).eligible, false, "no task loop chosen, nothing finished");
   const firstPlan = plan(first);
   assert.equal(firstPlan.eligible, true, "a role of the task loop's run finished");
@@ -192,12 +200,23 @@ try {
     "---\nname: general-helper\ndescription: Checks things any project has.\nside: framework\n---\n\n# General helper\n\n## Responsibility\nx\n\n## Inputs\nx\n\n## Output\nx\n\n## Writes\nnothing\n\n## Evaluation\nx\n",
   );
   fs.appendFileSync(path.join(third, ".claude/agents/owner-review.md"), "\nA project's improvement to a base role.\n");
-  const routed = plan(third);
-  assert.deepEqual(routed.libraries.map((library: { name: string }) => library.name), ["framework-checkout", "agent-loop-community"]);
-  assert.deepEqual(
-    routed.selected.map((unit: { name: string; library: string }) => [unit.name, unit.library]).sort(),
-    [["general-helper", "agent-loop-community"], ["owner-review", "framework-checkout"]],
-  );
+  // Shared: only what the project made, to the community library; the improved base role is not a contribution.
+  const shared = plan(third);
+  assert.equal(shared.purpose, "share");
+  assert.deepEqual(shared.libraries.map((library: { name: string }) => library.name), ["framework-checkout", "agent-loop-community"]);
+  assert.deepEqual(shared.selected.map((unit: { name: string; library: string }) => [unit.name, unit.library]), [["general-helper", "agent-loop-community"]]);
+  const improved = shared.not_selected.find((unit: { name: string }) => unit.name === "owner-review");
+  assert.deepEqual([improved.state, improved.library], ["improvement", "framework-checkout"]);
+  // Sent upstream: the improvement goes back to the library that gave it; the new role is not an improvement.
+  const upstream = plan(third, "--purpose", "upstream");
+  assert.deepEqual(upstream.selected.map((unit: { name: string; library: string }) => [unit.name, unit.library]), [["owner-review", "framework-checkout"]]);
+  assert.equal(upstream.not_selected.find((unit: { name: string }) => unit.name === "general-helper").state, "contribution");
+  assert.notEqual(shared.digest, upstream.digest);
+  // Without the community library, there is nowhere to share to until the owner has it fetched.
+  fs.rmSync(community, { recursive: true, force: true });
+  const nowhere = plan(third);
+  assert.equal(nowhere.library.available, false);
+  assert.match(nowhere.library.reason, /clone --purpose share/);
   console.log("project: ok");
 } finally {
   fs.rmSync(sandbox, { recursive: true, force: true });

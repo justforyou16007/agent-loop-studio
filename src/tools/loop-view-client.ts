@@ -95,6 +95,7 @@ export function client(): void {
       search: "搜索流程或角色",
       kind_task: "主任务",
       "kind_on-request": "按需运行",
+      kind_setup: "项目设置",
       library_only: "流程库里有、本项目未装",
       roles: "角色",
       no_match: "没有匹配的流程或角色。",
@@ -171,6 +172,7 @@ export function client(): void {
       search: "Search loops and roles",
       kind_task: "Task",
       "kind_on-request": "On request",
+      kind_setup: "Setup",
       library_only: "In the library, not installed",
       roles: "Roles",
       no_match: "No loop or role matches.",
@@ -244,7 +246,7 @@ export function client(): void {
     },
   };
   const TABS = ["steps", "parameters", "roles", "runs", "definition", "script", "check"];
-  const KINDS = ["task", "on-request"];
+  const KINDS = ["setup", "task", "on-request"];
 
   const app = document.getElementById("app") as HTMLElement;
   const embedded = document.getElementById("data");
