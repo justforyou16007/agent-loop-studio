@@ -167,6 +167,36 @@ try {
   assert.equal(firstPlan.eligible, true, "a role of the task loop's run finished");
   assert.deepEqual(firstPlan.finished_tasks, ["wf_1"]);
   assert.equal(firstPlan.check, "not-needed", "a project without an extension needs no check of its own");
+
+  // --- with the community library cloned into the framework's checkout, a new role any project can use goes there ---
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync("git", ["-C", cwd, "-c", "user.name=Tester", "-c", "user.email=tester@example.com", ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const checkout = path.join(sandbox, "framework-checkout");
+  fs.cpSync(path.join(source, "library"), path.join(checkout, "library"), { recursive: true });
+  git(sandbox, "init", "--quiet", "--initial-branch=main", checkout);
+  git(checkout, "add", "-A");
+  git(checkout, "commit", "--quiet", "-m", "library");
+  const community = path.join(checkout, "agent-loop-community");
+  for (const kind of ["loops", "roles"]) {
+    fs.mkdirSync(path.join(community, "library", kind), { recursive: true });
+    fs.writeFileSync(path.join(community, "library", kind, ".gitkeep"), "");
+  }
+  git(sandbox, "init", "--quiet", "--initial-branch=main", community);
+  git(community, "add", "-A");
+  git(community, "commit", "--quiet", "-m", "empty library");
+  const third = path.join(workspace, "third");
+  execFileSync(process.execPath, [installer, "--role", "default", "--project", third, "--library", checkout], { stdio: "ignore" });
+  fs.writeFileSync(
+    path.join(third, ".claude/agents/general-helper.md"),
+    "---\nname: general-helper\ndescription: Checks things any project has.\nside: framework\n---\n\n# General helper\n\n## Responsibility\nx\n\n## Inputs\nx\n\n## Output\nx\n\n## Writes\nnothing\n\n## Evaluation\nx\n",
+  );
+  fs.appendFileSync(path.join(third, ".claude/agents/owner-review.md"), "\nA project's improvement to a base role.\n");
+  const routed = plan(third);
+  assert.deepEqual(routed.libraries.map((library: { name: string }) => library.name), ["framework-checkout", "agent-loop-community"]);
+  assert.deepEqual(
+    routed.selected.map((unit: { name: string; library: string }) => [unit.name, unit.library]).sort(),
+    [["general-helper", "agent-loop-community"], ["owner-review", "framework-checkout"]],
+  );
   console.log("project: ok");
 } finally {
   fs.rmSync(sandbox, { recursive: true, force: true });

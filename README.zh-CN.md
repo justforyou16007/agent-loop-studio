@@ -36,6 +36,14 @@ node /path/to/project/.contrejour/dist/tools/studio.js --project /path/to/projec
 node dist/tools/studio.js --workspace ~/projects --library "$PWD"
 ```
 
+想复用其他项目分享出来的流程和角色，就把社区库克隆进这个仓库一次（这里的 git 会忽略它）：
+
+```bash
+git clone https://github.com/justforyou16007/agent-loop-community.git agent-loop-community
+```
+
+之后从这个仓库安装的项目就能在 Studio 里找到社区库的流程和角色；贡献时，新写的、任何项目都能用的流程或角色会送到社区库。没有克隆时，这类贡献会送到本仓库。
+
 ## 项目包
 
 基于框架的项目包在 `project.json` 里说明自己：有哪几种 profile（每种的会话入口角色、角色和流程来自流程库的哪几部分）、加了哪些 hook 动作，以及框架在需要项目决定的地方调用的扩展模块（怎样算"有任务完成"、哪些东西不能随贡献发出、贡献发出前要过的检查）。项目给框架角色的规则写在 `skills/shared-references/project-rules.md`。详见 [docs/architecture.md](docs/architecture.md)。

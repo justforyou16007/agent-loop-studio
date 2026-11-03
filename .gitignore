@@ -12,3 +12,5 @@ coverage/
 __pycache__/
 .pytest_cache/
 .DS_Store
+# The community library, cloned here to reuse and contribute its loops and roles.
+/agent-loop-community/

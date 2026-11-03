@@ -36,6 +36,14 @@ To keep several projects, start the Studio on a folder of them, with this checko
 node dist/tools/studio.js --workspace ~/projects --library "$PWD"
 ```
 
+To reuse what other projects shared, clone the community library into this checkout once (git ignores it here):
+
+```bash
+git clone https://github.com/justforyou16007/agent-loop-community.git agent-loop-community
+```
+
+Projects installed from this checkout then find its loops and roles in the Studio, and a contribution sends a new loop or role any project can use there. Without it, such a contribution comes to this repository instead.
+
 ## A project package
 
 A package that builds on the framework says what it is in `project.json`: its profiles (each with the role sessions enter as and the library sides its loops and roles come from), the hook actions it adds, and the module of its own helpers the framework calls where the project decides (what counts as a finished task, what must never leave in a contribution, the check a contribution must pass). Its own rules for the framework's roles go in `skills/shared-references/project-rules.md`. See [docs/architecture.md](docs/architecture.md).

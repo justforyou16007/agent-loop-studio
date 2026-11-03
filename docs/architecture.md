@@ -40,7 +40,7 @@ Dependencies point one way: a project depends on a version of this framework and
 
 ## Libraries
 
-A project's loops and roles come from libraries: the `library/` of the checkout it was installed from and, when that checkout is a project package's, of the framework's (`agent-loop-studio/`) and the community's (`agent-loop-community/`) it carries as submodules. The framework's `framework` folder holds its own base loops and roles; the community's holds those any project can use that projects contributed, and its other folders the loops and roles of kinds of projects; a package's folders hold its own sides'. Using a loop in the Studio, the loop viewer and reference projects look in all of them.
+A project's loops and roles come from libraries: the `library/` of the checkout it was installed from and, when that checkout is a project package's, of the framework's (`agent-loop-studio/`) and the community's (`agent-loop-community/`) it carries as submodules. The framework's `framework` folder holds its own base loops and roles; the community's holds those any project can use that projects contributed, and its other folders the loops and roles of kinds of projects; a package's folders hold its own sides'. A checkout of this framework may hold a clone of the community library at `agent-loop-community/` (git ignores it), so the projects installed from it find the community's loops and roles too. Using a loop in the Studio, the loop viewer and reference projects look in all of them.
 
 ## Contributions
 
