@@ -1,0 +1,14 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 100,
+  "ignorePatterns": [
+    "*.lock",
+    "**/*.py",
+    "**/*.md",
+    "skills/**",
+    "templates/**",
+    "tests/**",
+    "tools/**",
+    "distribution/releases/**"
+  ]
+}

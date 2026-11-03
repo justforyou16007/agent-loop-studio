@@ -1,0 +1,9 @@
+{
+  "name": "iterate-and-check",
+  "title": { "zh": "边做边检查", "en": "Iterate and check" },
+  "description": {
+    "zh": "按 task.md 一轮一轮地做：先读任务和项目记忆做计划，再实现、检查，把做成和没做成的都记进项目记忆；检查通过或轮数用完时停下请你审核。适合从零开始的大多数项目，在 Studio 里改成你要的样子。",
+    "en": "Work on task.md in rounds: plan from the task and the project's memory, build, check, and record what worked and what did not; stop for your review when the check passes or the rounds run out. A starting point for most projects; change it in the Studio to fit the work."
+  },
+  "task_loop": "iterate-and-check"
+}

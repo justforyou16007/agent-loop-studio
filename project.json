@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "name": "agent-loop-studio",
+  "description": "A project built in the Studio: its loops and roles, run on Claude Code.",
+  "profiles": {
+    "default": {
+      "description": "One machine, one project: the task loop the owner chooses in the Studio, run by the task manager.",
+      "entry_role": "task-manager",
+      "sides": []
+    }
+  }
+}

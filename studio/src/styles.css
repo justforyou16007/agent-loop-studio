@@ -1,0 +1,157 @@
+@import "tailwindcss" source(".");
+
+/* A light, quiet palette: white panels on a cool gray canvas, one blue for actions. */
+@theme {
+  --color-canvas: #f2f4f7;
+  --color-panel: #ffffff;
+  --color-line: #eaecf0;
+  --color-line-strong: #d0d5dd;
+  --color-ink: #101828;
+  --color-ink-2: #344054;
+  --color-ink-3: #667085;
+  --color-ink-4: #98a2b3;
+  --color-brand-50: #eef4ff;
+  --color-brand-100: #dbe7ff;
+  --color-brand-500: #3b6ff5;
+  --color-brand-600: #1f5be8;
+  --color-brand-700: #1748c4;
+  --color-wait-50: #fff6ed;
+  --color-wait-500: #f38744;
+  --color-wait-600: #e0631c;
+  --color-loop-50: #f4f0ff;
+  --color-loop-600: #7a4fe0;
+  --color-ok-50: #ecfdf3;
+  --color-ok-600: #079455;
+  --color-bad-50: #fef3f2;
+  --color-bad-600: #d92d20;
+  --font-sans:
+    "Inter", system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-float: 0 12px 16px -4px rgba(16, 24, 40, 0.08), 0 4px 6px -2px rgba(16, 24, 40, 0.03);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  margin: 0;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The canvas: dots on gray, quiet controls. */
+.react-flow {
+  --xy-background-color: var(--color-canvas);
+  --xy-edge-stroke: var(--color-ink-4);
+  --xy-edge-stroke-width: 1.5;
+}
+.react-flow__attribution {
+  display: none;
+}
+.react-flow__controls {
+  box-shadow: var(--shadow-card);
+  border: 1px solid var(--color-line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.react-flow__controls-button {
+  border-bottom-color: var(--color-line);
+}
+.react-flow__edge-textbg {
+  fill: #ffffff;
+}
+.react-flow__edge-text {
+  font-size: 11px;
+  fill: var(--color-ink-3);
+}
+.react-flow__edge.selected .react-flow__edge-path,
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke: var(--color-brand-500);
+}
+.react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Markdown from the definitions and role files. */
+.prose-studio {
+  overflow-wrap: anywhere;
+}
+.prose-studio p {
+  margin: 6px 0;
+}
+.prose-studio ul,
+.prose-studio ol {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+.prose-studio ul {
+  list-style: disc;
+}
+.prose-studio ol {
+  list-style: decimal;
+}
+.prose-studio li {
+  margin: 2px 0;
+}
+.prose-studio h1,
+.prose-studio h2,
+.prose-studio h3 {
+  font-weight: 600;
+  margin: 14px 0 6px;
+}
+.prose-studio h1 {
+  font-size: 17px;
+}
+.prose-studio h2 {
+  font-size: 15px;
+}
+.prose-studio h3 {
+  font-size: 14px;
+}
+.prose-studio code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--color-canvas);
+  border: 1px solid var(--color-line);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.prose-studio pre {
+  background: var(--color-canvas);
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow: auto;
+}
+.prose-studio pre code {
+  border: 0;
+  padding: 0;
+  background: none;
+}
+.prose-studio table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 13px;
+}
+.prose-studio th,
+.prose-studio td {
+  border: 1px solid var(--color-line);
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.prose-studio a {
+  color: var(--color-brand-600);
+}
+
+.scroll-thin {
+  scrollbar-width: thin;
+}

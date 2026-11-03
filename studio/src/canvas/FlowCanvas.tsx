@@ -1,0 +1,248 @@
+import {
+  Background,
+  BackgroundVariant,
+  Controls,
+  MarkerType,
+  MiniMap,
+  ReactFlow,
+  ReactFlowProvider,
+  useNodesInitialized,
+  useNodesState,
+  useReactFlow,
+  useStore,
+  type Edge,
+  type Node,
+} from "@xyflow/react";
+import { useEffect, useMemo, useRef } from "react";
+import type { Flow, FlowNode } from "../../../src/tools/studio-types.js";
+import { useLang } from "../i18n.js";
+import type { Reference } from "../types.js";
+import { aside, layoutFlow, paramId, type Size } from "./layout.js";
+import { nodeTypes, type ParamData, type StepData } from "./nodes.js";
+
+const GRAY = "#98a2b3";
+const BRAND = "#3b6ff5";
+const WAIT = "#f38744";
+
+export function nodeLabel(node: FlowNode, t: ReturnType<typeof useLang>["t"]): string {
+  if (node.kind === "start") return t("start");
+  if (node.kind === "end") return t("end");
+  return `${t("step_n", { n: node.number ?? "" })}${node.title ? ` · ${node.title}` : ""}`;
+}
+
+interface CanvasProps {
+  flow: Flow;
+  /** A preview only shows: no pointing, no inspector. */
+  preview?: boolean;
+  referenced?: Set<string>;
+  selected?: string | null;
+  onReference?: (reference: Reference) => void;
+  onSelect?: (id: string | null) => void;
+  /** Steps of the loop running now, by title: going on, or done. */
+  activity?: Map<string, "running" | "done">;
+}
+
+export function FlowCanvas(props: CanvasProps) {
+  return (
+    <ReactFlowProvider>
+      <Canvas key={`${props.flow.loop.source}:${props.flow.loop.name}`} {...props} />
+    </ReactFlowProvider>
+  );
+}
+
+function fallbackSize(node: Node): Size {
+  if (node.type === "param") return { width: 230, height: 90 };
+  if (node.type === "start" || node.type === "end") return { width: 140, height: 40 };
+  return { width: 300, height: 140 };
+}
+
+function Canvas({
+  flow,
+  preview = false,
+  referenced,
+  selected = null,
+  onReference,
+  onSelect,
+  activity,
+}: CanvasProps) {
+  const { t } = useLang();
+  const initial = useMemo<Node[]>(
+    () => [
+      ...flow.nodes.map(
+        (node, index): Node<StepData> => ({
+          id: node.id,
+          type: node.kind,
+          position: { x: 0, y: index * 180 },
+          data: { node, referenced: false, selected: false },
+          draggable: !preview,
+        }),
+      ),
+      ...flow.params.map(
+        (param, index): Node<ParamData> => ({
+          id: paramId(param.name),
+          type: "param",
+          position: { x: 420, y: index * 110 },
+          data: { param, referenced: false },
+          draggable: !preview,
+        }),
+      ),
+    ],
+    [flow, preview],
+  );
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initial);
+  const initialized = useNodesInitialized();
+  const laidOut = useRef(false);
+  const { getNodes, getNodesBounds, setViewport } = useReactFlow();
+  const width = useStore((state) => state.width);
+  const height = useStore((state) => state.height);
+
+  // Lay the flow out once every box has been measured, then fit it into view.
+  useEffect(() => {
+    if (!initialized || laidOut.current) return;
+    const measured = new Map(
+      getNodes().map((node) => [
+        node.id,
+        node.measured?.width && node.measured?.height
+          ? { width: node.measured.width, height: node.measured.height }
+          : fallbackSize(node),
+      ]),
+    );
+    const positions = layoutFlow(flow, (id) => measured.get(id) ?? { width: 300, height: 140 });
+    setNodes((current) =>
+      current.map((node) => ({ ...node, position: positions.get(node.id) ?? node.position })),
+    );
+    laidOut.current = true;
+    // Readable from the top: the whole flow when it fits, otherwise its start at a zoom that can still be read.
+    requestAnimationFrame(() => {
+      const placed = getNodes();
+      const bounds = getNodesBounds(placed);
+      const fit = Math.min(width / (bounds.width + 80), height / (bounds.height + 80));
+      const zoom = Math.min(1, Math.max(preview ? 0.55 : 0.72, fit));
+      void setViewport({
+        x: (width - bounds.width * zoom) / 2 - bounds.x * zoom,
+        y:
+          fit >= zoom
+            ? (height - bounds.height * zoom) / 2 - bounds.y * zoom
+            : 28 - bounds.y * zoom,
+        zoom,
+      });
+    });
+  }, [initialized, flow, getNodes, setNodes, setViewport, width, height, preview]);
+
+  useEffect(() => {
+    setNodes((current) =>
+      current.map((node) => ({
+        ...node,
+        data: {
+          ...node.data,
+          referenced: referenced?.has(node.id) ?? false,
+          selected: selected === node.id,
+          activity:
+            node.type === "step"
+              ? activity?.get(String((node.data as StepData).node.title))
+              : undefined,
+        },
+      })),
+    );
+  }, [referenced, selected, activity, setNodes]);
+
+  const byId = useMemo(() => new Map(flow.nodes.map((node) => [node.id, node])), [flow]);
+  const edges = useMemo<Edge[]>(() => {
+    // Arrows around the side each get their own lane, so they do not lie on top of one another.
+    const lanes = new Map(flow.edges.filter(aside).map((edge, index) => [edge.id, index]));
+    const out: Edge[] = flow.edges.map((edge) => {
+      const color = edge.kind === "back" ? WAIT : edge.kind === "branch" ? BRAND : GRAY;
+      const back = edge.kind === "back";
+      const side = aside(edge);
+      return {
+        id: edge.id,
+        source: edge.from,
+        target: edge.to,
+        sourceHandle: side ? "back-out" : "out",
+        targetHandle: side ? "back-in" : "in",
+        type: "smoothstep",
+        label: edge.label || undefined,
+        labelStyle: {
+          fill: back ? WAIT : edge.kind === "branch" ? BRAND : "#667085",
+          fontWeight: 500,
+        },
+        labelBgPadding: [6, 3] as [number, number],
+        labelBgBorderRadius: 6,
+        labelBgStyle: { fill: "#ffffff", stroke: "#eaecf0" },
+        markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color },
+        style: {
+          stroke: color,
+          strokeWidth: referenced?.has(edge.id) ? 2.5 : 1.5,
+          strokeDasharray: back ? "6 4" : undefined,
+        },
+        pathOptions: { borderRadius: 14, offset: side ? 28 + (lanes.get(edge.id) ?? 0) * 16 : 20 },
+        zIndex: back ? 0 : 1,
+      };
+    });
+    for (const param of flow.params)
+      for (const link of param.links)
+        out.push({
+          id: `${paramId(param.name)}->${link}`,
+          source: paramId(param.name),
+          target: link,
+          sourceHandle: "out",
+          targetHandle: "param",
+          type: "default",
+          style: { stroke: "#b9c0cc", strokeWidth: 1.25, strokeDasharray: "4 4" },
+          selectable: false,
+          focusable: false,
+        });
+    return out;
+  }, [flow, referenced]);
+
+  const edgeLabel = (id: string): string => {
+    const edge = flow.edges.find((entry) => entry.id === id);
+    if (!edge) return id;
+    const from = byId.get(edge.from);
+    const to = byId.get(edge.to);
+    return t("edge_ref", {
+      from: from ? nodeLabel(from, t) : edge.from,
+      to: to ? nodeLabel(to, t) : edge.to,
+    });
+  };
+
+  return (
+    <ReactFlow
+      nodes={nodes}
+      edges={edges}
+      nodeTypes={nodeTypes}
+      onNodesChange={onNodesChange}
+      nodesConnectable={false}
+      edgesFocusable={!preview}
+      elementsSelectable={!preview}
+      minZoom={0.2}
+      maxZoom={1.6}
+      proOptions={{ hideAttribution: true }}
+      onNodeClick={(_, node) => {
+        if (preview) return;
+        if (node.type === "param") {
+          const param = (node.data as ParamData).param;
+          onReference?.({ kind: "param", id: node.id, label: param.name });
+        } else onSelect?.(node.id);
+      }}
+      onEdgeClick={(_, edge) => {
+        if (preview || edge.id.startsWith("p:")) return;
+        onReference?.({ kind: "edge", id: edge.id, label: edgeLabel(edge.id) });
+      }}
+      onPaneClick={() => onSelect?.(null)}
+    >
+      <Background variant={BackgroundVariant.Dots} gap={16} size={1.3} color="#d0d5dd" />
+      <Controls showInteractive={false} position="bottom-left" />
+      {!preview && (
+        <MiniMap
+          pannable
+          zoomable
+          position="bottom-right"
+          nodeColor={(node) => (node.type === "param" ? "#eaecf0" : "#c7d7fe")}
+          maskColor="rgba(242,244,247,0.7)"
+          style={{ width: 160, height: 110, borderRadius: 10, border: "1px solid #eaecf0" }}
+        />
+      )}
+    </ReactFlow>
+  );
+}

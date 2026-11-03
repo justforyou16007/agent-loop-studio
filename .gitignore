@@ -1,0 +1,14 @@
+node_modules/
+dist/
+artifacts/
+coverage/
+*.tsbuildinfo
+.contrejour/
+.claude/
+.agents/
+.env
+.env.*
+!.env.example
+__pycache__/
+.pytest_cache/
+.DS_Store
