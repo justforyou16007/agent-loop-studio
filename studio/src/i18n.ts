@@ -84,9 +84,18 @@ const zh = {
   preview: "预览",
   open: "放到画布",
   opened: "已放到画布：{loop}",
-  mode_change: "修改画布上的流程",
-  mode_reply: "回复审核",
-  mode_find: "找相近的流程",
+  resize_chat: "拖动调整对话栏宽度，双击恢复默认",
+  focus_hint: "在右侧画布上突出显示",
+  focus_role: "角色 {name}：画布上有 {n} 个步骤用到它",
+  focus_role_none: "画布上的流程没有用到角色 {name}",
+  focus_step: "步骤 {name}",
+  focus_step_none: "画布上的流程没有叫 {name} 的步骤",
+  focus_loop: "流程 {name}：画布上有 {n} 个步骤运行它",
+  focus_loop_here: "流程 {name} 就是画布上这个",
+  focus_loop_none: "画布上的流程没有运行 {name}",
+  focus_pointer: "{name}",
+  focus_clear: "取消高亮",
+  view_role: "查看角色",
   composer_change: "说说要怎么改；输入 @ 引用画布上的步骤、箭头或参数…",
   composer_reply: "批准、取消，或者说还要怎么改（输入 @ 引用画布上的内容）…",
   authoring_started:
@@ -106,6 +115,7 @@ const zh = {
   authoring_done: "这次修改已经结束：{result}",
   authoring_installed: "已经装进项目：{name}。画布上是装好的版本。",
   authoring_not_installed: "没有装进项目（{name}）：{reason}。草稿已经丢弃，项目里的流程保持原样。",
+  authoring_reused: "用现有的流程 {name}，没有改动；它已经放在画布上。",
   authoring_idle: "后台会话 {session} 停下了，但没有给出审核或结果。它最后说：",
   authoring_gone: "后台会话 {session} 已经不在了。",
   failed_start: "没能启动后台会话：",
@@ -293,9 +303,18 @@ const en: Record<TextKey, string> = {
   preview: "Preview",
   open: "Put on canvas",
   opened: "On the canvas: {loop}",
-  mode_change: "Change the loop on the canvas",
-  mode_reply: "Reply to the review",
-  mode_find: "Find close loops",
+  resize_chat: "Drag to resize the chat; double-click for the default width",
+  focus_hint: "Point it out on the canvas",
+  focus_role: "Role {name}: {n} steps on the canvas use it",
+  focus_role_none: "The loop on the canvas does not use the role {name}",
+  focus_step: "Step {name}",
+  focus_step_none: "The loop on the canvas has no step {name}",
+  focus_loop: "Loop {name}: {n} steps on the canvas run it",
+  focus_loop_here: "{name} is the loop on the canvas",
+  focus_loop_none: "The loop on the canvas does not run {name}",
+  focus_pointer: "{name}",
+  focus_clear: "Clear",
+  view_role: "View the role",
   composer_change: "Say how to change it; type @ to point at steps, arrows or parameters…",
   composer_reply: "Approve, cancel, or say what else to change (type @ to point at the canvas)…",
   authoring_started:
@@ -320,6 +339,7 @@ const en: Record<TextKey, string> = {
   authoring_installed: "Installed in the project: {name}. The canvas shows the installed version.",
   authoring_not_installed:
     "Not installed ({name}): {reason}. The draft was discarded; the project's loop is as it was.",
+  authoring_reused: "Using the existing loop {name} as it is; it is on the canvas.",
   authoring_idle: "Session {session} stopped without a review or a result. Its last words:",
   authoring_gone: "Session {session} no longer exists.",
   failed_start: "Could not start the background session: ",
@@ -432,6 +452,24 @@ export function translate(
   values: Record<string, string | number> = {},
 ): string {
   return TEXT[lang][key].replace(/\{(\w+)\}/g, (_, name: string) => String(values[name] ?? ""));
+}
+
+/** A sentence with its values apart, so the page can show some of them, the names of roles and loops, as chips. */
+export function sentenceParts(
+  lang: Lang,
+  key: TextKey,
+  values: Record<string, string | number> = {},
+): (string | { name: string; value: string })[] {
+  const template = TEXT[lang][key];
+  const parts: (string | { name: string; value: string })[] = [];
+  let last = 0;
+  for (const match of template.matchAll(/\{(\w+)\}/g)) {
+    parts.push(template.slice(last, match.index));
+    parts.push({ name: match[1]!, value: String(values[match[1]!] ?? "") });
+    last = (match.index ?? 0) + match[0].length;
+  }
+  parts.push(template.slice(last));
+  return parts;
 }
 
 export interface LangValue {

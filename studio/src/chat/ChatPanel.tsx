@@ -8,17 +8,17 @@ import {
   LayoutPanelLeft,
   Loader2,
   PencilLine,
-  Search,
   SlidersHorizontal,
   Sparkles,
+  Workflow,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { Candidate } from "../../../src/tools/studio-types.js";
-import { useLang } from "../i18n.js";
+import { sentenceParts, useLang, type TextKey } from "../i18n.js";
 import { Markdown } from "../Markdown.js";
 import type { LoopRef } from "../PreviewDialog.js";
-import type { ChatMessage, Pointable, Reference } from "../types.js";
+import type { ChatMessage, Focus, Names, Pointable, Reference } from "../types.js";
 import { Badge, Button, cx, LoopBadges } from "../ui.js";
 
 /** The @ being typed just before the caret, and what follows it so far; none inside a word, such as an e-mail address. */
@@ -45,13 +45,14 @@ export function ChatPanel({
   onPreview,
   onOpen,
   current,
-  mode,
-  onMode,
-  canChange,
+  editing,
   waiting,
   target,
   onClearTarget,
   onViewFiles,
+  names,
+  focus,
+  onFocus,
 }: {
   messages: ChatMessage[];
   references: Reference[];
@@ -64,16 +65,18 @@ export function ChatPanel({
   onPreview: (target: LoopRef) => void;
   onOpen: (target: LoopRef) => void;
   current: LoopRef | null;
-  /** What a message does: change the loop on the canvas, or find loops. */
-  mode: "change" | "find";
-  onMode: (mode: "change" | "find") => void;
-  canChange: boolean;
+  /** A loop is on the canvas, or a role is chosen: a message changes it. */
+  editing: boolean;
   /** A loop waits for the owner's reply. */
   waiting: boolean;
   /** What the chat changes instead of the loop on the canvas, such as a role. */
   target: string | null;
   onClearTarget: () => void;
   onViewFiles: (files: NonNullable<ChatMessage["files"]>) => void;
+  /** The roles and loops the project knows, whose names in the chat point them out on the canvas. */
+  names: Names;
+  focus: Focus | null;
+  onFocus: (focus: Focus) => void;
 }) {
   const { t } = useLang();
   const [draft, setDraft] = useState("");
@@ -169,6 +172,9 @@ export function ChatPanel({
             current={current}
             onReply={waiting && !busy ? onSend : undefined}
             onViewFiles={onViewFiles}
+            names={names}
+            focus={focus}
+            onFocus={onFocus}
           />
         ))}
         {onlyWelcome && (
@@ -202,28 +208,6 @@ export function ChatPanel({
             >
               <X size={12} />
             </button>
-          </div>
-        )}
-        {canChange && (
-          <div className="mb-2 inline-flex rounded-lg bg-canvas p-0.5 text-[12px]">
-            {(
-              [
-                ["change", waiting ? "mode_reply" : "mode_change", PencilLine],
-                ["find", "mode_find", Search],
-              ] as const
-            ).map(([key, label, Icon]) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => onMode(key)}
-                className={cx(
-                  "flex items-center gap-1 rounded-md px-2.5 py-1 font-medium",
-                  mode === key ? "bg-white text-ink shadow-card" : "text-ink-3 hover:text-ink-2",
-                )}
-              >
-                <Icon size={12} /> {t(label)}
-              </button>
-            ))}
           </div>
         )}
         <div className="relative rounded-xl border border-line-strong bg-white shadow-card focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-100">
@@ -349,13 +333,7 @@ export function ChatPanel({
                 send();
               }
             }}
-            placeholder={t(
-              mode === "find" || !canChange
-                ? "composer"
-                : waiting
-                  ? "composer_reply"
-                  : "composer_change",
-            )}
+            placeholder={t(waiting ? "composer_reply" : editing ? "composer_change" : "composer")}
             className="block w-full resize-none bg-transparent px-3 py-2.5 text-[13px] leading-5 outline-none placeholder:text-ink-4"
           />
           <div className="flex items-center justify-between px-2 pb-2">
@@ -391,6 +369,9 @@ function Message({
   current,
   onReply,
   onViewFiles,
+  names,
+  focus,
+  onFocus,
 }: {
   message: ChatMessage;
   onPreview: (target: LoopRef) => void;
@@ -399,6 +380,9 @@ function Message({
   /** Answers the review this message shows, while it is the one waiting. */
   onReply?: (text: string) => void;
   onViewFiles: (files: NonNullable<ChatMessage["files"]>) => void;
+  names: Names;
+  focus: Focus | null;
+  onFocus: (focus: Focus) => void;
 }) {
   const { t } = useLang();
   if (message.from === "owner")
@@ -408,9 +392,15 @@ function Message({
           {message.references?.length ? (
             <div className="mb-1 flex flex-wrap gap-1">
               {message.references.map((reference) => (
-                <span key={reference.id} className="rounded bg-white/20 px-1 text-[11px]">
+                <button
+                  key={reference.id}
+                  type="button"
+                  title={t("focus_hint")}
+                  onClick={() => onFocus({ kind: "pointer", reference })}
+                  className="rounded bg-white/20 px-1 text-[11px] hover:bg-white/35"
+                >
                   @{reference.label}
-                </span>
+                </button>
               ))}
             </div>
           ) : null}
@@ -425,7 +415,17 @@ function Message({
       </span>
       <div className="min-w-0 flex-1 space-y-2">
         <p className="whitespace-pre-wrap text-[13px] leading-5 text-ink-2">
-          {message.key ? t(message.key, message.values) : message.text}
+          {message.key ? (
+            <Sentence
+              k={message.key}
+              values={message.values ?? {}}
+              names={names}
+              focus={focus}
+              onFocus={onFocus}
+            />
+          ) : (
+            message.text
+          )}
         </p>
         {message.progress && message.progress.length > 0 && (
           <ol className="space-y-1 rounded-xl border border-line bg-canvas/60 px-3 py-2">
@@ -436,15 +436,23 @@ function Message({
                 ) : (
                   <Loader2 size={13} className="animate-spin text-brand-600" />
                 )}
-                <span className="font-medium">{step.phase}</span>
-                {step.role && <span className="font-mono text-[11px] text-ink-4">{step.role}</span>}
+                <Mention kind="step" name={step.phase} focus={focus} onFocus={onFocus} />
+                {step.role && (
+                  <Mention kind="role" name={step.role} focus={focus} onFocus={onFocus} />
+                )}
               </li>
             ))}
           </ol>
         )}
         {message.markdown && (
           <div className="scroll-thin max-h-[420px] overflow-y-auto rounded-xl border border-line bg-canvas/60 px-3 py-1">
-            <Markdown text={message.markdown} />
+            <Markdown
+              text={message.markdown}
+              roles={names.roles}
+              onRole={(name) => onFocus({ kind: "role", name })}
+              loops={names.loops}
+              onLoop={(name) => onFocus({ kind: "loop", name })}
+            />
           </div>
         )}
         {message.files && message.files.length > 0 && (
@@ -524,5 +532,79 @@ function CandidateCard({
         </Button>
       </div>
     </div>
+  );
+}
+
+/** The values of the Studio's sentences that may name the project's roles and loops. */
+const NAMED = new Set(["loop", "role", "roles", "name"]);
+const sameFocus = (a: Focus | null, b: Focus): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+/** A role, loop or step named in the chat: a click points it out on the canvas, the rest greyed. */
+function Mention({
+  kind,
+  name,
+  focus,
+  onFocus,
+}: {
+  kind: "role" | "loop" | "step";
+  name: string;
+  focus: Focus | null;
+  onFocus: (focus: Focus) => void;
+}) {
+  const { t } = useLang();
+  const target: Focus = { kind, name };
+  return (
+    <button
+      type="button"
+      title={t("focus_hint")}
+      onClick={() => onFocus(target)}
+      className={cx(
+        "inline-flex max-w-full items-center gap-0.5 truncate rounded-md px-1 align-baseline text-[12px] leading-5",
+        kind === "step" && "font-medium text-ink-2 hover:bg-white",
+        kind === "role" && "bg-brand-50 font-mono text-brand-700 hover:bg-brand-100",
+        kind === "loop" && "bg-loop-50 font-mono text-loop-600 hover:ring-1 hover:ring-loop-600",
+        sameFocus(focus, target) && "ring-1 ring-loop-600",
+      )}
+    >
+      {kind === "loop" && <Workflow size={11} className="shrink-0" />}
+      {name}
+    </button>
+  );
+}
+
+/** One of the Studio's sentences, with the roles and loops it names as chips. */
+function Sentence({
+  k,
+  values,
+  names,
+  focus,
+  onFocus,
+}: {
+  k: TextKey;
+  values: Record<string, string | number>;
+  names: Names;
+  focus: Focus | null;
+  onFocus: (focus: Focus) => void;
+}) {
+  const { lang } = useLang();
+  return (
+    <>
+      {sentenceParts(lang, k, values).map((part, index) =>
+        typeof part === "string" || !NAMED.has(part.name) ? (
+          <Fragment key={index}>{typeof part === "string" ? part : part.value}</Fragment>
+        ) : (
+          <Fragment key={index}>
+            {part.value.split(/(,\s*)/).map((piece, at) => {
+              const kind = names.roles.has(piece) ? "role" : names.loops.has(piece) ? "loop" : null;
+              return kind ? (
+                <Mention key={at} kind={kind} name={piece} focus={focus} onFocus={onFocus} />
+              ) : (
+                <Fragment key={at}>{piece}</Fragment>
+              );
+            })}
+          </Fragment>
+        ),
+      )}
+    </>
   );
 }

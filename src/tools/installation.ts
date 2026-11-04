@@ -20,6 +20,8 @@ export const WORKFLOWS_DIR = ".claude/workflows";
 
 export const installationFile = (root: string): string =>
   path.join(path.resolve(root), ".contrejour", "install.json");
+/** Whether a folder is a project: the installer left its record there. */
+export const isProject = (root: string): boolean => fs.existsSync(installationFile(root));
 /** What publish-cli.js keeps about this project's publications to the community library. */
 export const contributionsDir = (root: string): string =>
   path.join(path.resolve(root), ".contrejour", "contributions");
@@ -28,8 +30,8 @@ function installation(root: string): Record<string, unknown> {
   const file = installationFile(root);
   if (!fs.existsSync(file))
     failA1(
-      "INVALID_VALUE",
-      "install the project first (install-contrejour.sh --role <profile>)",
+      "NOT_A_PROJECT",
+      `${path.resolve(root)} is not a project (it has no .contrejour/install.json): create or open projects in the Studio, on its Projects page`,
       file,
     );
   const installed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));

@@ -19,7 +19,7 @@ import { createCli, runCli } from "../lib/cli.js";
 import { flowOf, searchLoops, summarize } from "./flow.js";
 import { collectView, fingerprint, type ViewData } from "./loop-view.js";
 import type { SessionOptions } from "./sessions.js";
-import { COMMUNITY_LIBRARY, COMMUNITY_URL, installedLibrary } from "./installation.js";
+import { COMMUNITY_LIBRARY, COMMUNITY_URL, installedLibrary, isProject } from "./installation.js";
 import { useLoop } from "./project-loop.js";
 import { writeStateJsonAtomic } from "./state-file.js";
 import { copyProject, createProject, listProjects, listReferences } from "./workspace.js";
@@ -223,6 +223,11 @@ export async function serveStudio(
   } = {},
 ): Promise<Studio> {
   let root = projectRoot ? path.resolve(projectRoot) : "";
+  // Only a folder the installer made a project is opened: anything else has no role to run its loops as.
+  if (root && !isProject(root))
+    throw new Error(
+      `${root} is not a project (it has no .contrejour/install.json): start the Studio without --project, then create or open projects on its Projects page`,
+    );
   let workspace = options.workspace
     ? path.resolve(options.workspace)
     : root
@@ -267,6 +272,11 @@ export async function serveStudio(
     head: boolean,
     response: http.ServerResponse,
   ): Promise<void> {
+    // A project deleted or broken outside the Studio is no longer open.
+    if (root && !isProject(root)) {
+      root = "";
+      cache = null;
+    }
     if (url.pathname.startsWith("/api/projects")) return projects(request, url, head, response);
     // Everything else is about the project open now.
     if (!root) return json(response, 409, { error: "open or create a project first" }, head);

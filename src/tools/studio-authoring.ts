@@ -77,16 +77,24 @@ const pointing = (pointers: Pointer[]): string =>
     ? `\n\n[On the canvas: ${pointers.map((pointer) => pointer.label).join("; ")}]`
     : "";
 
-/** What the owner wants, as `description`: their words, the loop on the canvas, what they pointed at. */
+/**
+ * What the owner wants, as `description`: their words, what they pointed at, and
+ * the loop or role they were looking at. A role the owner chose to change is
+ * changed; the loop on the canvas is what the words change unless they ask for
+ * another loop, which the authoring loop's own steps then find or build.
+ */
 export function describeRequest(
   loop: AuthoringLoop,
   base: Conversation["base"],
   text: string,
   pointers: Pointer[],
 ): string {
-  const what = loop === "loop-authoring" ? "loop" : "role";
   const where = base?.source === "library" ? "from the library" : "of this project";
-  const opening = base ? `Change the existing ${what} \`${base.name}\` (${where}): ` : "";
+  const opening = !base
+    ? ""
+    : loop === "loop-authoring"
+      ? `The owner is looking at the loop \`${base.name}\` (${where}); their words change it, unless they ask for another loop: `
+      : `Change the existing role \`${base.name}\` (${where}): `;
   return `${opening}${text}${pointing(pointers)}`;
 }
 /** The owner's reply as the session receives it, and passes it to the loop: their words and what they pointed at. */

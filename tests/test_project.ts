@@ -210,9 +210,25 @@ else { process.stderr.write("not stood in for: " + command); process.exit(1); }
     assert.deepEqual(read(settingsFile), { workspace: other, recent: [workspace] });
     assert.equal(JSON.parse((await request(at("api/projects/workspace"), { cookie, method: "POST", body: { path: workspace } })).body).workspace, workspace);
     assert.deepEqual(JSON.parse((await request(at("api/projects"), { cookie })).body).recent_workspaces, [other]);
+
+    // A project whose installation record went away outside the Studio is no longer open: nothing runs as a role it no longer has.
+    assert.equal((await request(at("api/projects/open"), { cookie, method: "POST", body: { name: "first" } })).status, 200);
+    const record = path.join(first, ".contrejour/install.json");
+    fs.renameSync(record, `${record}.away`);
+    assert.equal((await request(at("api/run"), { cookie, method: "POST", body: { name: "setup" } })).status, 409);
+    assert.equal(JSON.parse((await request(at("api/projects"), { cookie })).body).current, null);
+    fs.renameSync(`${record}.away`, record);
   } finally {
     await studio.close();
   }
+  // Only a project is opened: a folder the installer never made one says so, with its path, and how to make one.
+  await assert.rejects(serveStudio(path.join(sandbox, "not-a-project"), { port: 0 }), /not-a-project is not a project .*Projects page/);
+  // The loop on the canvas is what the owner's words change, unless they ask for another loop; a role chosen to change is changed.
+  const { describeRequest } = (await import(pathToFileURL(path.join(source, "dist/tools/studio-authoring.js")).href)) as {
+    describeRequest(loop: string, base: { name: string; source: string } | null, text: string, pointers: { kind: string; id: string; label: string }[]): string;
+  };
+  assert.match(describeRequest("loop-authoring", { name: "iterate-and-check", source: "project" }, "Add a review", []), /looking at the loop `iterate-and-check`.*unless they ask for another loop: Add a review/);
+  assert.match(describeRequest("role-authoring", { name: "planner", source: "project" }, "Plan less", []), /^Change the existing role `planner`/);
 
   // --- the hooks: a trajectory recorded, an answer that is not the owner's refused ---
   const first = path.join(workspace, "first");

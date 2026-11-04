@@ -16,7 +16,7 @@ import {
 import { useEffect, useMemo, useRef } from "react";
 import type { Flow, FlowNode } from "../../../src/tools/studio-types.js";
 import { useLang } from "../i18n.js";
-import type { Pointable, Reference } from "../types.js";
+import type { Focus, Pointable, Reference } from "../types.js";
 import { aside, layoutFlow, paramId, type Size } from "./layout.js";
 import { nodeTypes, type ParamData, type StepData } from "./nodes.js";
 
@@ -68,6 +68,35 @@ export function pointablesOf(flow: Flow, t: Translate): Pointable[] {
   ];
 }
 
+/**
+ * The boxes and arrows a focus lights up on this flow, the rest to be greyed:
+ * empty when the flow has none of it.
+ */
+export function focusedIds(flow: Flow, focus: Focus): Set<string> {
+  const ids = new Set<string>();
+  if (focus.kind === "pointer") {
+    const { reference } = focus;
+    const edge = flow.edges.find((entry) => entry.id === reference.id);
+    const param = flow.params.find((entry) => paramId(entry.name) === reference.id);
+    if (edge) for (const id of [edge.id, edge.from, edge.to]) ids.add(id);
+    else if (param) for (const id of [reference.id, ...param.links]) ids.add(id);
+    else if (flow.nodes.some((node) => node.id === reference.id)) ids.add(reference.id);
+    return ids;
+  }
+  for (const node of flow.nodes) {
+    const lit =
+      focus.kind === "role"
+        ? node.roles.includes(focus.name) ||
+          node.items.some((item) => item.roles.includes(focus.name))
+        : focus.kind === "step"
+          ? node.title === focus.name
+          : node.loops.includes(focus.name) ||
+            (focus.name === flow.loop.name && node.kind === "step");
+    if (lit) ids.add(node.id);
+  }
+  return ids;
+}
+
 interface CanvasProps {
   flow: Flow;
   /** A preview only shows: no pointing, no inspector. */
@@ -78,6 +107,9 @@ interface CanvasProps {
   onSelect?: (id: string | null) => void;
   /** Steps of the loop running now, by title: going on, or done. */
   activity?: Map<string, "running" | "done">;
+  /** What the chat points out: these boxes and arrows stay lit, the rest is greyed. */
+  focus?: Set<string> | null;
+  onClearFocus?: () => void;
 }
 
 export function FlowCanvas(props: CanvasProps) {
@@ -102,6 +134,8 @@ function Canvas({
   onReference,
   onSelect,
   activity,
+  focus = null,
+  onClearFocus,
 }: CanvasProps) {
   const { t } = useLang();
   const initial = useMemo<Node[]>(
@@ -130,7 +164,7 @@ function Canvas({
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initial);
   const initialized = useNodesInitialized();
   const laidOut = useRef(false);
-  const { getNodes, getNodesBounds, setViewport } = useReactFlow();
+  const { getNodes, getNodesBounds, setViewport, fitView } = useReactFlow();
   const width = useStore((state) => state.width);
   const height = useStore((state) => state.height);
 
@@ -167,6 +201,13 @@ function Canvas({
     });
   }, [initialized, flow, getNodes, setNodes, setViewport, width, height, preview]);
 
+  /** A box stays lit when nothing is pointed out, when it is, or, for a parameter, when a step it changes is. */
+  const lit = (id: string): boolean =>
+    !focus ||
+    focus.has(id) ||
+    flow.params.some(
+      (param) => paramId(param.name) === id && param.links.some((link) => focus.has(link)),
+    );
   useEffect(() => {
     setNodes((current) =>
       current.map((node) => ({
@@ -179,10 +220,23 @@ function Canvas({
             node.type === "step"
               ? activity?.get(String((node.data as StepData).node.title))
               : undefined,
+          focused: Boolean(focus?.has(node.id)),
+          dimmed: !lit(node.id),
         },
       })),
     );
-  }, [referenced, selected, activity, setNodes]);
+    // `lit` reads only flow and focus.
+  }, [referenced, selected, activity, focus, flow, setNodes]);
+
+  // What the chat points out is brought into view.
+  const focusKey = focus ? [...focus].sort().join(" ") : "";
+  useEffect(() => {
+    if (!focus?.size || !laidOut.current) return;
+    const boxes = [...focus].filter((id) => flow.nodes.some((node) => node.id === id));
+    if (boxes.length)
+      void fitView({ nodes: boxes.map((id) => ({ id })), duration: 350, padding: 0.4, maxZoom: 1 });
+    // Only a new focus moves the view.
+  }, [focusKey]);
 
   const edges = useMemo<Edge[]>(() => {
     // Arrows around the side each get their own lane, so they do not lie on top of one another.
@@ -214,6 +268,11 @@ function Canvas({
         },
         pathOptions: { borderRadius: 14, offset: side ? 28 + (lanes.get(edge.id) ?? 0) * 16 : 20 },
         zIndex: back ? 0 : 1,
+        // An arrow stays lit when it is pointed out, or runs between two lit boxes.
+        className:
+          focus && !(focus.has(edge.id) || (focus.has(edge.from) && focus.has(edge.to)))
+            ? "opacity-15 transition-opacity"
+            : "transition-opacity",
       };
     });
     for (const param of flow.params)
@@ -228,9 +287,10 @@ function Canvas({
           style: { stroke: "#b9c0cc", strokeWidth: 1.25, strokeDasharray: "4 4" },
           selectable: false,
           focusable: false,
+          className: focus && !focus.has(link) ? "opacity-15" : undefined,
         });
     return out;
-  }, [flow, referenced]);
+  }, [flow, referenced, focus]);
 
   return (
     <ReactFlow
@@ -255,7 +315,10 @@ function Canvas({
         if (preview || edge.id.startsWith("p:")) return;
         onReference?.({ kind: "edge", id: edge.id, label: edgeLabel(flow, edge.id, t) });
       }}
-      onPaneClick={() => onSelect?.(null)}
+      onPaneClick={() => {
+        onSelect?.(null);
+        onClearFocus?.();
+      }}
     >
       <Background variant={BackgroundVariant.Dots} gap={16} size={1.3} color="#d0d5dd" />
       <Controls showInteractive={false} position="bottom-left" />

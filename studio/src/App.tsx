@@ -13,12 +13,13 @@ import {
   Users,
   FolderKanban,
   Workflow,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AuthoringStatus, Flow, Overview } from "../../src/tools/studio-types.js";
 import { api } from "./api.js";
 import { Inspector } from "./canvas/Inspector.js";
-import { FlowCanvas, pointablesOf } from "./canvas/FlowCanvas.js";
+import { FlowCanvas, focusedIds, pointablesOf } from "./canvas/FlowCanvas.js";
 import { ChatPanel } from "./chat/ChatPanel.js";
 import { LangContext, translate, useLang, type Lang, type TextKey } from "./i18n.js";
 import { ParamsDialog, RoleDraftDialog, RunDialog } from "./dialogs.js";
@@ -26,11 +27,16 @@ import { DefinitionDialog, PreviewDialog, type LoopRef } from "./PreviewDialog.j
 import { RolesPage } from "./pages/RolesPage.js";
 import { ProjectsPage } from "./pages/ProjectsPage.js";
 import { RunsPage } from "./pages/RunsPage.js";
-import type { ChatMessage, Reference } from "./types.js";
+import type { ChatMessage, Focus, Names, Reference } from "./types.js";
 import { Button, cx, LoopBadges } from "./ui.js";
 
 type Page = "projects" | "compose" | "roles" | "runs";
 const LANG_KEY = "contrejour-studio-lang";
+const CHAT_WIDTH_KEY = "contrejour-studio-chat-width";
+const CHAT_WIDTH = 380;
+/** The chat is at least wide enough for its cards, and leaves the canvas room. */
+const chatWidthWithin = (width: number): number =>
+  Math.round(Math.max(300, Math.min(width, Math.max(300, window.innerWidth - 480))));
 
 function storedLang(): Lang | null {
   try {
@@ -40,6 +46,23 @@ function storedLang(): Lang | null {
     return null;
   }
 }
+function storedChatWidth(): number {
+  try {
+    const value = Number(localStorage.getItem(CHAT_WIDTH_KEY));
+    return chatWidthWithin(value > 0 ? value : CHAT_WIDTH);
+  } catch {
+    return CHAT_WIDTH;
+  }
+}
+function rememberChatWidth(width: number): void {
+  try {
+    localStorage.setItem(CHAT_WIDTH_KEY, String(width));
+  } catch {
+    // The width still holds until the page is reloaded.
+  }
+}
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 export function App() {
   const [overview, setOverview] = useState<Overview | null>(null);
@@ -54,8 +77,6 @@ export function App() {
   const [definition, setDefinition] = useState<LoopRef | null>(null);
   const [busy, setBusy] = useState(false);
   const [role, setRole] = useState<string | null>(null);
-  /** With a loop on the canvas, a message changes it; otherwise, or when asked, it finds loops. */
-  const [mode, setMode] = useState<"change" | "find">("change");
   const [conversation, setConversation] = useState<string | null>(null);
   const [status, setStatus] = useState<AuthoringStatus | null>(null);
   const [showOriginal, setShowOriginal] = useState(false);
@@ -68,6 +89,9 @@ export function App() {
   const [roleDraft, setRoleDraft] = useState<
     { name: string; text: string; original: string | null }[] | null
   >(null);
+  /** What the chat points out on the canvas, the rest greyed. */
+  const [focus, setFocus] = useState<Focus | null>(null);
+  const [chatWidth, setChatWidth] = useState(storedChatWidth);
   const pendingMessage = useRef<number | null>(null);
   const handled = useRef("");
   const nextId = useRef(1);
@@ -190,10 +214,7 @@ export function App() {
         candidates: shown,
       });
       const top = close[0];
-      if (top) {
-        await open({ name: top.name, source: top.source }, true);
-        setMode("change");
-      }
+      if (top) await open({ name: top.name, source: top.source }, true);
     } catch (reason) {
       replace(waiting, { from: "studio", text: t("load_failed") + (reason as Error).message });
     } finally {
@@ -251,12 +272,17 @@ export function App() {
     }
   };
 
+  /**
+   * One chat box. A loop waiting for the owner gets the reply; with a loop on the
+   * canvas, or a role chosen, the authoring loop takes the words, its own steps
+   * finding the loops close to them or changing the one shown; with nothing on
+   * the canvas yet, the close loops are found at once and the closest is shown.
+   */
   const send = async (text: string) => {
     const pointed = references;
     say({ from: "owner", text, references: pointed });
     setReferences([]);
-    const canChange = Boolean(flow || roleTarget) || status?.state === "waiting";
-    if (canChange && (mode === "change" || pointed.length)) await change(text, pointed);
+    if (status?.state === "waiting" || flow || roleTarget) await change(text, pointed);
     else if (text) await find(text);
   };
 
@@ -336,9 +362,19 @@ export function App() {
     pendingMessage.current = null;
     setShowOriginal(false);
     if (status.state === "done") {
+      // The canvas shows what came of it: the loop installed or chosen as it is, or the one changed.
+      const fields = isObject(status.result) ? status.result : {};
+      const made =
+        status.loop === "loop-authoring" &&
+        (fields.installed === true || fields.reused === true) &&
+        typeof fields.loop === "string" &&
+        fields.loop
+          ? fields.loop
+          : null;
       void load().then(() => {
-        if (status.base)
-          void open({ name: status.base.name, source: "project" }, true).catch(() => undefined);
+        const shownNext = made ?? status.base?.name;
+        if (shownNext)
+          void open({ name: shownNext, source: "project" }, true).catch(() => undefined);
       });
       setConversation(null);
     }
@@ -411,7 +447,6 @@ export function App() {
   const editRole = (name: string | null, source = "project") => {
     setRoleTarget({ name, source });
     setPage("compose");
-    setMode("change");
     say({
       from: "studio",
       key: name ? "role_target" : "role_target_new",
@@ -434,6 +469,61 @@ export function App() {
   const shown = draft && !showOriginal ? draft : flow;
   /** What the chat's @ list offers: what the canvas shows now. */
   const pointables = useMemo(() => (shown ? pointablesOf(shown, t) : []), [shown, t]);
+  /** The roles and loops whose names in the chat point them out on the canvas. */
+  const names = useMemo<Names>(
+    () => ({
+      roles: new Set([
+        ...(overview?.roles ?? []).map((entry) => entry.name),
+        ...(shown?.roles ?? []).map((entry) => entry.name),
+      ]),
+      loops: new Set([
+        ...(overview?.loops ?? []).map((entry) => entry.name),
+        ...(shown ? [shown.loop.name] : []),
+      ]),
+    }),
+    [overview, shown],
+  );
+  /** A focus says the same again: pointing at what is already pointed out clears it. */
+  const toggleFocus = (next: Focus) =>
+    setFocus((now) => (JSON.stringify(now) === JSON.stringify(next) ? null : next));
+  const focused = useMemo(() => (shown && focus ? focusedIds(shown, focus) : null), [shown, focus]);
+  // Another loop on the canvas: what was pointed out was the last one's.
+  useEffect(() => setFocus(null), [flow?.loop.name]);
+  /** The chat panel's width, dragged by its edge; the canvas takes the rest. */
+  const resizeChat = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const handle = event.currentTarget;
+    handle.setPointerCapture(event.pointerId);
+    const startX = event.clientX;
+    const startWidth = chatWidth;
+    let width = startWidth;
+    const move = (moved: PointerEvent) => {
+      width = chatWidthWithin(startWidth + moved.clientX - startX);
+      setChatWidth(width);
+    };
+    const end = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+      handle.removeEventListener("pointercancel", end);
+      document.body.classList.remove("select-none", "cursor-col-resize");
+      rememberChatWidth(width);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+    document.body.classList.add("select-none", "cursor-col-resize");
+  };
+  const setChatWidthTo = (width: number) => {
+    const next = chatWidthWithin(width);
+    setChatWidth(next);
+    rememberChatWidth(next);
+  };
+  // A narrower window leaves the canvas its room.
+  useEffect(() => {
+    const fit = () => setChatWidth((width) => chatWidthWithin(width));
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, []);
   const activity = useMemo(() => {
     const map = new Map<string, "running" | "done">();
     if (status?.purpose !== "run" || status.state !== "running" || status.loop !== flow?.loop.name)
@@ -530,35 +620,54 @@ export function App() {
         ) : (
           <div className="min-h-0 flex-1">
             {page === "compose" && (
-              <div className="grid h-full grid-cols-[minmax(320px,380px)_minmax(0,1fr)]">
-                <ChatPanel
-                  messages={messages}
-                  references={references}
-                  pointables={pointables}
-                  busy={busy}
-                  onSend={(text) => void send(text)}
-                  onReference={point}
-                  onRemoveReference={(id) =>
-                    setReferences((list) => list.filter((entry) => entry.id !== id))
-                  }
-                  onPreview={setPreview}
-                  onOpen={(target) => void open(target)}
-                  current={current}
-                  mode={flow || roleTarget ? mode : "find"}
-                  onMode={setMode}
-                  canChange={Boolean(flow || roleTarget)}
-                  target={
-                    roleTarget
-                      ? roleTarget.name
-                        ? t("target_role", { role: roleTarget.name })
-                        : t("target_role_new")
-                      : null
-                  }
-                  onClearTarget={() => setRoleTarget(null)}
-                  onViewFiles={setRoleDraft}
-                  waiting={status?.state === "waiting"}
-                />
-                <section className="flex min-w-0 flex-col">
+              <div className="flex h-full">
+                <div className="relative h-full shrink-0" style={{ width: chatWidth }}>
+                  <ChatPanel
+                    messages={messages}
+                    references={references}
+                    pointables={pointables}
+                    busy={busy}
+                    onSend={(text) => void send(text)}
+                    onReference={point}
+                    onRemoveReference={(id) =>
+                      setReferences((list) => list.filter((entry) => entry.id !== id))
+                    }
+                    onPreview={setPreview}
+                    onOpen={(target) => void open(target)}
+                    current={current}
+                    editing={Boolean(flow || roleTarget)}
+                    target={
+                      roleTarget
+                        ? roleTarget.name
+                          ? t("target_role", { role: roleTarget.name })
+                          : t("target_role_new")
+                        : null
+                    }
+                    onClearTarget={() => setRoleTarget(null)}
+                    onViewFiles={setRoleDraft}
+                    waiting={status?.state === "waiting"}
+                    names={names}
+                    focus={focus}
+                    onFocus={toggleFocus}
+                  />
+                  <div
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-valuenow={chatWidth}
+                    tabIndex={0}
+                    title={t("resize_chat")}
+                    onPointerDown={resizeChat}
+                    onDoubleClick={() => setChatWidthTo(CHAT_WIDTH)}
+                    onKeyDown={(event) => {
+                      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+                        event.preventDefault();
+                        setChatWidthTo(chatWidth + (event.key === "ArrowRight" ? 24 : -24));
+                      }
+                    }}
+                    className="absolute inset-y-0 -right-1 z-20 w-2 cursor-col-resize outline-none transition-colors hover:bg-brand-500/25 focus-visible:bg-brand-500/30"
+                  />
+                </div>
+                <section className="flex min-w-0 flex-1 flex-col">
                   {flow ? (
                     <div className="flex items-center gap-3 border-b border-line bg-panel px-4 py-2.5">
                       <div className="min-w-0 flex-1">
@@ -656,12 +765,31 @@ export function App() {
                         onReference={point}
                         onSelect={setSelected}
                         activity={activity}
+                        focus={focused?.size ? focused : null}
+                        onClearFocus={() => setFocus(null)}
                       />
                     ) : (
                       <EmptyCanvas
                         overview={overview}
                         onOpen={(target) => void open(target, true)}
                         onPreview={setPreview}
+                      />
+                    )}
+                    {shown && focus && (
+                      <FocusBar
+                        flow={shown}
+                        focus={focus}
+                        lit={focused?.size ?? 0}
+                        onClear={() => setFocus(null)}
+                        onRole={showRole}
+                        onPreview={(name) =>
+                          setPreview({
+                            name,
+                            source:
+                              overview.loops.find((entry) => entry.name === name)?.source ??
+                              "project",
+                          })
+                        }
                       />
                     )}
                     {shown && selected && (
@@ -724,6 +852,60 @@ export function App() {
   );
 }
 
+/** What the chat points out on the canvas, in words, and how to stop: or why nothing on the canvas lights up. */
+function FocusBar({
+  flow,
+  focus,
+  lit,
+  onClear,
+  onRole,
+  onPreview,
+}: {
+  flow: Flow;
+  focus: Focus;
+  lit: number;
+  onClear: () => void;
+  onRole: (name: string) => void;
+  onPreview: (loop: string) => void;
+}) {
+  const { t } = useLang();
+  const name = focus.kind === "pointer" ? focus.reference.label : focus.name;
+  const steps = flow.nodes.filter((node) => node.kind === "step").length;
+  const key: TextKey =
+    focus.kind === "pointer"
+      ? "focus_pointer"
+      : focus.kind === "loop" && focus.name === flow.loop.name
+        ? "focus_loop_here"
+        : lit
+          ? (`focus_${focus.kind}` as TextKey)
+          : (`focus_${focus.kind}_none` as TextKey);
+  return (
+    <div className="absolute left-1/2 top-3 z-10 flex max-w-[90%] -translate-x-1/2 items-center gap-2 rounded-xl border border-loop-600/30 bg-panel px-3 py-1.5 text-[12px] text-ink-2 shadow-float">
+      <span className="truncate">
+        {t(key, { name, n: focus.kind === "loop" && lit === steps ? steps : lit })}
+      </span>
+      {!lit && focus.kind === "role" && (
+        <Button size="sm" onClick={() => onRole(focus.name)}>
+          <Users size={12} /> {t("view_role")}
+        </Button>
+      )}
+      {!lit && focus.kind === "loop" && (
+        <Button size="sm" onClick={() => onPreview(focus.name)}>
+          <Eye size={12} /> {t("preview")}
+        </Button>
+      )}
+      <button
+        type="button"
+        title={t("focus_clear")}
+        onClick={onClear}
+        className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-ink-3 hover:bg-canvas hover:text-ink-2"
+      >
+        <X size={12} /> {t("focus_clear")}
+      </button>
+    </div>
+  );
+}
+
 function EmptyCanvas({
   overview,
   onOpen,
@@ -782,6 +964,9 @@ function ended(result: unknown): Omit<ChatMessage, "id"> {
       key: "authoring_installed",
       values: { name: typeof fields.installed === "string" ? fields.installed : name },
     };
+  // The owner chose an existing loop as it is: nothing was drafted, nothing failed.
+  if (fields.reused === true && name)
+    return { from: "studio", key: "authoring_reused", values: { name } };
   if (fields.installed === false)
     return {
       from: "studio",

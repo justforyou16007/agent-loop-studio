@@ -8,6 +8,19 @@ export interface Reference {
 export interface Pointable extends Reference {
   detail: string;
 }
+/**
+ * What the chat points out on the canvas, the rest greyed: the steps a role
+ * does, a step by its title, the steps that run a loop, or what the owner
+ * pointed at.
+ */
+export type Focus =
+  | { kind: "role" | "step" | "loop"; name: string }
+  | { kind: "pointer"; reference: Reference };
+/** The roles and loops the project knows: their names in the chat point them out on the canvas. */
+export interface Names {
+  roles: Set<string>;
+  loops: Set<string>;
+}
 
 export interface ChatMessage {
   id: number;

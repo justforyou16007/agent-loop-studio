@@ -11,6 +11,9 @@ import type {
   SearchResult,
 } from "../../src/tools/studio-types.js";
 
+/** What went wrong, as the owner reads it: the helper's words without its code (`NOT_A_PROJECT: ...`). */
+const readable = (message: string): string => message.replace(/^[A-Z][A-Z0-9_]+: /, "");
+
 /** The Studio's own server, same origin; the session cookie goes along by itself. */
 async function get<T>(path: string): Promise<T> {
   const response = await fetch(path, { headers: { accept: "application/json" } });
@@ -20,7 +23,7 @@ async function get<T>(path: string): Promise<T> {
   }
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as { error?: string };
-    throw Object.assign(new Error(body.error ?? `HTTP ${response.status}`), {
+    throw Object.assign(new Error(readable(body.error ?? `HTTP ${response.status}`)), {
       status: response.status,
     });
   }
@@ -47,7 +50,12 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     throw new Error("signed out");
   }
   const reply = (await response.json().catch(() => ({}))) as T & { error?: string };
-  if (!response.ok) throw new Error(reply.error ?? `HTTP ${response.status}`);
+  if (!response.ok) {
+    // A project closed elsewhere answers 409: the page goes back to the projects.
+    throw Object.assign(new Error(readable(reply.error ?? `HTTP ${response.status}`)), {
+      status: response.status,
+    });
+  }
   return reply;
 }
 

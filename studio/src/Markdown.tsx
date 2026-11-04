@@ -1,18 +1,24 @@
+import { Workflow } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 /**
- * Text of a definition or a role file. A role named in backticks becomes a
- * chip that opens it; links leave only to http(s).
+ * Text of a definition, a role file or a review note. A role or loop named in
+ * backticks becomes a chip the reader can click: the caller says what it does
+ * (open the role, or point it out on the canvas). Links leave only to http(s).
  */
 export function Markdown({
   text,
   roles,
   onRole,
+  loops,
+  onLoop,
 }: {
   text: string;
   roles?: Set<string>;
   onRole?: (name: string) => void;
+  loops?: Set<string>;
+  onLoop?: (name: string) => void;
 }) {
   return (
     <div className="prose-studio text-[13px] leading-6 text-ink-2">
@@ -30,6 +36,17 @@ export function Markdown({
                   onClick={() => onRole(value)}
                   className="rounded-md bg-brand-50 px-1 font-mono text-[12px] text-brand-700 hover:bg-brand-100"
                 >
+                  {value}
+                </button>
+              );
+            if (!className && loops?.has(value) && onLoop)
+              return (
+                <button
+                  type="button"
+                  onClick={() => onLoop(value)}
+                  className="inline-flex items-center gap-0.5 rounded-md bg-loop-50 px-1 font-mono text-[12px] text-loop-600 hover:ring-1 hover:ring-loop-600"
+                >
+                  <Workflow size={11} />
                   {value}
                 </button>
               );

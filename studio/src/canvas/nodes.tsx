@@ -10,14 +10,27 @@ export interface StepData extends Record<string, unknown> {
   selected: boolean;
   /** In the loop running now: going on, or done. */
   activity?: "running" | "done";
+  /** Pointed out from the chat; the boxes that are not are greyed. */
+  focused?: boolean;
+  dimmed?: boolean;
 }
 export interface ParamData extends Record<string, unknown> {
   param: FlowParam;
   referenced: boolean;
+  focused?: boolean;
+  dimmed?: boolean;
 }
 export type StepNodeType = Node<StepData, "step">;
 export type EdgeNodeType = Node<StepData, "start" | "end">;
 export type ParamNodeType = Node<ParamData, "param">;
+
+/** How a box shows that the chat points it out, or that it is greyed because another is. */
+const focusStyle = (data: { focused?: boolean; dimmed?: boolean }): string =>
+  cx(
+    "transition-[opacity,filter] duration-200",
+    data.dimmed && "opacity-25 grayscale",
+    data.focused && "ring-2 ring-loop-600 ring-offset-2 ring-offset-canvas shadow-float",
+  );
 
 /** The first lines of a step as plain words: no backticks, no inline JSON. */
 export function plain(text: string): string {
@@ -49,6 +62,7 @@ export function StepNode({ data }: NodeProps<StepNodeType>) {
         referenced && "ring-2 ring-brand-500 ring-offset-2 ring-offset-canvas",
         activity === "running" && "animate-pulse border-brand-500 ring-2 ring-brand-100",
         activity === "done" && "border-ok-600/50",
+        focusStyle(data),
       )}
     >
       {activity === "done" && (
@@ -145,6 +159,7 @@ export function StartNode({ data }: NodeProps<EdgeNodeType>) {
       className={cx(
         "flex h-10 w-[140px] items-center justify-center gap-2 rounded-full border border-line bg-panel text-[13px] font-medium text-ink-2 shadow-card",
         data.referenced && "ring-2 ring-brand-500 ring-offset-2 ring-offset-canvas",
+        focusStyle(data),
       )}
     >
       <Handle type="source" position={Position.Bottom} id="out" className={hidden} />
@@ -163,6 +178,7 @@ export function EndNode({ data }: NodeProps<EdgeNodeType>) {
       className={cx(
         "flex h-10 w-[140px] items-center justify-center gap-2 rounded-full border border-line bg-panel text-[13px] font-medium text-ink-2 shadow-card",
         data.referenced && "ring-2 ring-brand-500 ring-offset-2 ring-offset-canvas",
+        focusStyle(data),
       )}
     >
       <Handle type="target" position={Position.Top} id="in" className={hidden} />
@@ -190,6 +206,7 @@ export function ParamNode({ data }: NodeProps<ParamNodeType>) {
       className={cx(
         "w-[230px] rounded-xl border border-dashed border-line-strong bg-panel/90 px-3 py-2.5 shadow-card",
         referenced && "ring-2 ring-brand-500 ring-offset-2 ring-offset-canvas",
+        focusStyle(data),
       )}
     >
       <Handle type="source" position={Position.Left} id="out" className={hidden} />
