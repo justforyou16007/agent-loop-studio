@@ -34,7 +34,7 @@ Return `stale` true when the loop's script is stale or has defects a regenerated
 ### prepare
 
 1. A loop can be tried only when its definition declares `trial-args` (its author's word that a run with them stays inside the project) and it runs no loop of its own (its script calls no `workflow(`). Otherwise return `runnable` false and say why in `why`: no trial arguments (`loop-editor` can add them when a small real run stays inside the project), or loops of its own.
-2. `args` are the `trial-args`, with what the definition's Inputs require besides that they leave out, taken from the project as the loop's task manager would take it (the full text of `task.md` for a `task` argument, say) and the parameters recorded in `.contrejour/loop.json` when the loop is the project's task loop. Never add an argument that would take the run outside the project.
+2. `args` are the `trial-args`, with what the definition's Inputs require besides that they leave out, taken from the project as the loop's task manager would take it (the full text of `task.md` for a `task` argument, say). `params` always holds every parameter the definition declares: its default, over it the value in `.contrejour/loop.json` when the loop is the project's task loop, and over that the `trial-args`' own. Never add an argument that would take the run outside the project.
 3. `since`: the time now (`date -u +%Y-%m-%dT%H:%M:%S.%3NZ`), so the trial's trajectories can be told from earlier runs'. `why`: in a few words, what the trial will do.
 
 ### assess
