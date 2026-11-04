@@ -181,6 +181,8 @@ try {
   assert.equal(firstPlan.check, "not-needed", "a project without an extension needs no check of its own");
 
   // --- a whole project, published to the community library, and another project started from it ---
+  // Publishing commits with the machine's git identity; a machine without one (CI's) gets this one.
+  Object.assign(process.env, { GIT_AUTHOR_NAME: "Tester", GIT_AUTHOR_EMAIL: "tester@example.com", GIT_COMMITTER_NAME: "Tester", GIT_COMMITTER_EMAIL: "tester@example.com" });
   const git = (cwd: string, ...args: string[]) =>
     execFileSync("git", ["-C", cwd, "-c", "user.name=Tester", "-c", "user.email=tester@example.com", ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   // The Studio's checkout, with the community library cloned beside it.
