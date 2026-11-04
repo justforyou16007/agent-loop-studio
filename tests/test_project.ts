@@ -20,6 +20,14 @@ const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agent-loo
 const workspace = path.join(sandbox, "workspace");
 fs.mkdirSync(workspace);
 const read = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
+// Claude Code's config, stood in for: the Studio records its trust there, never in this machine's own.
+const claudeConfig = path.join(sandbox, "claude-config");
+fs.mkdirSync(claudeConfig);
+const claudeJson = path.join(claudeConfig, ".claude.json");
+const claudeBefore = { numStartups: 7, oauthAccount: { accountUuid: "someone" }, projects: { "/elsewhere": { allowedTools: ["Bash"], hasTrustDialogAccepted: false } } };
+fs.writeFileSync(claudeJson, JSON.stringify(claudeBefore, null, 2));
+process.env.CLAUDE_CONFIG_DIR = claudeConfig;
+const trustedIn = (folder: string) => read(claudeJson).projects?.[folder]?.hasTrustDialogAccepted === true;
 
 function request(url: string, options: { method?: string; cookie?: string; body?: unknown } = {}) {
   const target = new URL(url);
@@ -103,6 +111,14 @@ else { process.stderr.write("not stood in for: " + command); process.exit(1); }
     const at = (relative: string) => new URL(relative, studio.url).href;
     const cookie = String((await request(studio.loginUrl)).headers["set-cookie"]).split(";")[0]!;
     assert.equal((await request(at("api/overview"), { cookie })).status, 409, "no project is open yet");
+    // The workspace the Studio starts with is trusted in Claude Code, and so is each project in it, a repository of its own.
+    assert.ok(trustedIn(workspace) && trustedIn(plain));
+    assert.deepEqual(read(claudeJson).projects[workspace], {
+      allowedTools: [], mcpContextUris: [], mcpServers: {}, enabledMcpjsonServers: [], disabledMcpjsonServers: [],
+      hasTrustDialogAccepted: true, hasClaudeMdExternalIncludesApproved: false, hasClaudeMdExternalIncludesWarningShown: false,
+    }, "a new entry in Claude Code's own shape");
+    assert.deepEqual([read(claudeJson).numStartups, read(claudeJson).oauthAccount, read(claudeJson).projects["/elsewhere"]], [7, claudeBefore.oauthAccount, claudeBefore.projects["/elsewhere"]], "the rest is as it was");
+    assert.equal(fs.existsSync(`${claudeJson}.lock`), false);
     let projects = JSON.parse((await request(at("api/projects"), { cookie })).body);
     assert.equal(projects.current, null);
     assert.deepEqual(projects.projects.map((entry: { name: string }) => entry.name), ["plain"]);
@@ -116,6 +132,7 @@ else { process.stderr.write("not stood in for: " + command); process.exit(1); }
     const created = await request(at("api/projects/new"), { cookie, method: "POST", body: { name: "first", reference: "iterate-and-check" } });
     assert.equal(created.status, 200, created.body);
     const first = path.join(workspace, "first");
+    assert.ok(trustedIn(first), "a project made in the workspace is trusted as it is made");
     for (const role of ["planner", "builder", "checker"]) {
       assert.ok(fs.existsSync(path.join(first, ".claude/agents", `${role}.md`)));
       assert.ok(fs.existsSync(path.join(first, ".contrejour/seeded/agents", `${role}.md`)), "kept as the baseline for contributions");
@@ -227,6 +244,7 @@ else { process.stderr.write("not stood in for: " + command); process.exit(1); }
     projects = JSON.parse((await request(at("api/projects"), { cookie })).body);
     assert.deepEqual([projects.workspace, projects.projects, projects.recent_workspaces], [other, [], [workspace]]);
     assert.deepEqual(read(settingsFile), { workspace: other, recent: [workspace] });
+    assert.ok(trustedIn(other), "a workspace switched to is trusted");
     assert.equal(JSON.parse((await request(at("api/projects/workspace"), { cookie, method: "POST", body: { path: workspace } })).body).workspace, workspace);
     assert.deepEqual(JSON.parse((await request(at("api/projects"), { cookie })).body).recent_workspaces, [other]);
 
@@ -245,11 +263,69 @@ else { process.stderr.write("not stood in for: " + command); process.exit(1); }
     const refusal = JSON.parse(untrusted.body);
     assert.deepEqual([refusal.code, refusal.location], ["WORKSPACE_NOT_TRUSTED", first]);
     assert.match(refusal.error, /Yes, I trust this folder/);
+    assert.equal(refusal.detail, null, "the Studio had recorded the trust; Claude Code refused anyway");
+    // Without Claude Code's config the Studio cannot record it, and says why.
+    fs.renameSync(claudeJson, `${claudeJson}.away`);
+    const unrecorded = JSON.parse((await request(at("api/run"), { cookie, method: "POST", body: { name: "setup" } })).body);
+    assert.match(unrecorded.detail, /does not exist yet: run claude once/);
+    assert.equal(fs.existsSync(claudeJson), false, "the Studio never creates Claude Code's config");
+    fs.renameSync(`${claudeJson}.away`, claudeJson);
+    // A workspace that could not be trusted before is, once a loop starts in one of its projects.
+    const config = read(claudeJson);
+    delete config.projects[workspace];
+    fs.writeFileSync(claudeJson, JSON.stringify(config, null, 2));
+    await request(at("api/run"), { cookie, method: "POST", body: { name: "setup" } });
+    assert.ok(trustedIn(workspace));
     const store = path.join(first, ".contrejour/studio/conversations.json");
     assert.equal(fs.existsSync(store) ? read(store).conversations.length : 0, 0, "no conversation is recorded for a session that never started");
   } finally {
     await studio.close();
   }
+  // Claude Code's trust, as the Studio records it: under Claude Code's lock, in its shape, never more than the folder.
+  const { trustFolders } = (await import(pathToFileURL(path.join(source, "dist/tools/claude-trust.js")).href)) as {
+    trustFolders(folders: string[], options?: { file?: string; waitMs?: number }): Promise<{ trusted: string[]; already: string[]; skipped: { folder: string; reason: string }[] }>;
+  };
+  const trustArea = path.join(sandbox, "trust");
+  const repository = path.join(trustArea, "repository");
+  fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+  fs.mkdirSync(path.join(repository, "inside"));
+  const loose = path.join(trustArea, "loose");
+  fs.mkdirSync(loose);
+  // A folder inside another repository would trust all of it: left to Claude Code's own prompt.
+  let outcome = await trustFolders([path.join(repository, "inside"), repository]);
+  assert.deepEqual(outcome.trusted, [repository]);
+  assert.match(outcome.skipped[0]!.reason, /inside the git repository .*repository: trusting it would trust all of that repository/);
+  assert.deepEqual((await trustFolders([repository])).already, [repository], "trusted already: nothing written");
+  // Claude Code holding its lock: the Studio waits, then leaves the file alone.
+  const lock = `${claudeJson}.lock`;
+  fs.mkdirSync(lock);
+  const untouched = fs.readFileSync(claudeJson, "utf8");
+  outcome = await trustFolders([loose], { waitMs: 200 });
+  assert.match(outcome.skipped[0]!.reason, /held Claude Code's config .* too long/);
+  assert.equal(fs.readFileSync(claudeJson, "utf8"), untouched);
+  // A lock left by a process that is gone is taken.
+  const longAgo = new Date(Date.now() - 120_000);
+  fs.utimesSync(lock, longAgo, longAgo);
+  assert.deepEqual((await trustFolders([loose])).trusted, [loose]);
+  assert.equal(fs.existsSync(lock), false);
+  assert.ok(trustedIn(loose));
+  // Written as Claude Code writes it: two spaces, nothing after the last brace.
+  assert.ok(fs.readFileSync(claudeJson, "utf8").endsWith("}") && fs.readFileSync(claudeJson, "utf8").includes('\n  "numStartups": 7'));
+  // A config behind a link: the link stays, its target changes.
+  const target = path.join(trustArea, "target.json");
+  const link = path.join(trustArea, "link.json");
+  fs.writeFileSync(target, "{}");
+  fs.symlinkSync(target, link);
+  assert.deepEqual((await trustFolders([loose], { file: link })).trusted, [loose]);
+  assert.ok(fs.lstatSync(link).isSymbolicLink() && read(target).projects[loose].hasTrustDialogAccepted);
+  // Not JSON, or not there: nothing is written, nothing created.
+  const broken = path.join(trustArea, "broken.json");
+  fs.writeFileSync(broken, "{ not json");
+  assert.match((await trustFolders([loose], { file: broken })).skipped[0]!.reason, /not readable as JSON/);
+  assert.equal(fs.readFileSync(broken, "utf8"), "{ not json");
+  const absent = path.join(trustArea, "absent.json");
+  assert.match((await trustFolders([loose], { file: absent })).skipped[0]!.reason, /does not exist yet/);
+  assert.equal(fs.existsSync(absent), false);
   // Only a project is opened: a folder the installer never made one says so, with its path, and how to make one.
   await assert.rejects(serveStudio(path.join(sandbox, "not-a-project"), { port: 0 }), /not-a-project is not a project .*Projects page/);
   // The loop on the canvas is what the owner's words change, unless they ask for another loop; a role chosen to change is changed.

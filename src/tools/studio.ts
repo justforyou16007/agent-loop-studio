@@ -21,6 +21,7 @@ import { collectView, fingerprint, type ViewData } from "./loop-view.js";
 import type { SessionOptions } from "./sessions.js";
 import { COMMUNITY_LIBRARY, COMMUNITY_URL, installedLibrary, isProject } from "./installation.js";
 import { useLoop } from "./project-loop.js";
+import { trustFolders } from "./claude-trust.js";
 import { writeStateJsonAtomic } from "./state-file.js";
 import { copyProject, createProject, listProjects, listReferences } from "./workspace.js";
 import {
@@ -234,6 +235,33 @@ export async function serveStudio(
       ? path.dirname(root)
       : "";
   let recent = readRemembered(options.settings).recent;
+  /** Why Claude Code's trust could not be recorded for a folder, the last time: the page shows it with the steps. */
+  const trustProblems = new Map<string, string>();
+  /** Claude Code's trust in these folders, recorded as the owner decided for their workspace. */
+  const trust = async (folders: string[]): Promise<void> => {
+    try {
+      const outcome = await trustFolders(folders);
+      for (const folder of [...outcome.trusted, ...outcome.already]) trustProblems.delete(folder);
+      for (const entry of outcome.skipped) trustProblems.set(entry.folder, entry.reason);
+    } catch (error) {
+      for (const folder of folders)
+        trustProblems.set(path.resolve(folder), (error as Error).message);
+    }
+  };
+  /** The workspace the owner chose, and every project in it, trusted: each project is a repository of its own. */
+  const trustWorkspace = (): Promise<void> =>
+    workspace
+      ? trust([workspace, ...listProjects(workspace).map((project) => project.root)])
+      : Promise.resolve();
+  /**
+   * Before a loop starts in a project of the workspace: one put there by other
+   * means is trusted too, and the workspace with it when it could not be before
+   * (Claude Code had not run on this machine yet, say).
+   */
+  const trustOpen = (): Promise<void> =>
+    root && workspace && path.dirname(root) === workspace
+      ? trust([workspace, root])
+      : Promise.resolve();
   const host = options.host ?? "127.0.0.1";
   if (!LOOPBACK.has(host))
     throw new Error(
@@ -293,6 +321,7 @@ export async function serveStudio(
         return json(response, 409, {
           error: "this project has no loop-trial loop: update its installation",
         });
+      await trustOpen();
       const conversation = await trialLoop(root, sessionOptions, name, goal);
       return json(response, 200, { id: conversation.id, session: conversation.session.id });
     }
@@ -313,6 +342,7 @@ export async function serveStudio(
       }
       if (!(await view()).loops.some((loop) => loop.name === name && loop.source === "project"))
         return json(response, 404, { error: `this project has no loop ${name}` });
+      await trustOpen();
       const conversation = await runLoop(root, sessionOptions, name);
       return json(response, 200, { id: conversation.id, session: conversation.session.id });
     }
@@ -453,6 +483,7 @@ export async function serveStudio(
       workspace = where;
       if (root && path.dirname(root) !== workspace) root = "";
       cache = null;
+      await trustWorkspace();
       if (options.settings)
         try {
           writeStateJsonAtomic(options.settings, { workspace, recent });
@@ -499,9 +530,11 @@ export async function serveStudio(
         const reference =
           typeof body.reference === "string" && body.reference ? body.reference : null;
         root = createProject(workspace, name, { library, reference }).root;
+        await trust([root]);
       } else if (url.pathname === "/api/projects/copy") {
         const from = typeof body.from === "string" ? body.from : "";
         root = copyProject(workspace, from, name).root;
+        await trust([root]);
       } else return json(response, 404, { error: "not found" });
     } catch (error) {
       return json(response, 400, { error: (error as Error).message });
@@ -540,6 +573,7 @@ export async function serveStudio(
           ? { name: body.base.name, source: body.base.source }
           : null;
       if (!text) return json(response, 400, { error: "say what you want" });
+      await trustOpen();
       const conversation = await startConversation(root, sessionOptions, {
         loop,
         base,
@@ -553,6 +587,7 @@ export async function serveStudio(
       if (!text && !pointers.length) return json(response, 400, { error: "the reply is empty" });
       if (!(await conversationStatuses(root, sessionOptions)).some((entry) => entry.id === body.id))
         return json(response, 404, { error: `no conversation ${body.id}` });
+      await trustOpen();
       const conversation = await answerConversation(root, sessionOptions, {
         id: body.id,
         text,
@@ -643,8 +678,15 @@ export async function serveStudio(
         // The helpers' code goes along, so the page can say what to do (a folder Claude Code does not trust yet, say).
         const coded =
           error instanceof A1Error ? { code: error.code, location: error.location } : {};
-        const status = coded.code === "WORKSPACE_NOT_TRUSTED" ? 409 : 500;
-        json(response, status, { error: (error as Error).message, ...coded }, head);
+        const untrusted = coded.code === "WORKSPACE_NOT_TRUSTED";
+        // And, for a folder Claude Code does not trust, why the Studio could not record its trust.
+        const detail = untrusted ? (trustProblems.get(coded.location ?? "") ?? null) : null;
+        json(
+          response,
+          untrusted ? 409 : 500,
+          { error: (error as Error).message, ...coded, ...(untrusted ? { detail } : {}) },
+          head,
+        );
       }
       return;
     }
@@ -671,6 +713,8 @@ export async function serveStudio(
     file(url.pathname, head, response);
   }
 
+  // The workspace the Studio starts with is trusted, as one the owner switches to is.
+  await trustWorkspace();
   const server = http.createServer((request, response) => {
     void handle(request, response).catch((error: unknown) => {
       if (!response.headersSent) json(response, 500, { error: (error as Error).message });

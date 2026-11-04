@@ -53,6 +53,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     error?: string;
     code?: string;
     location?: string | null;
+    detail?: string | null;
   };
   if (!response.ok) {
     // The helper's code says what stood in the way (a folder Claude Code does not trust yet, say), and where.
@@ -60,6 +61,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
       status: response.status,
       code: reply.code,
       location: reply.location ?? undefined,
+      detail: reply.detail ?? undefined,
     });
   }
   return reply;

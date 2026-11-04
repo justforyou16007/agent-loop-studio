@@ -457,7 +457,13 @@ function Message({
             />
           </div>
         )}
-        {message.trust && <TrustCard folder={message.trust.folder} onRetry={message.retry} />}
+        {message.trust && (
+          <TrustCard
+            folder={message.trust.folder}
+            detail={message.trust.detail}
+            onRetry={message.retry}
+          />
+        )}
         {message.files && message.files.length > 0 && (
           <Button size="sm" onClick={() => onViewFiles(message.files!)}>
             <Eye size={13} /> {t("view_role_draft")}
@@ -616,11 +622,19 @@ function Sentence({
 const quoted = (folder: string): string => `'${folder.replace(/'/g, "'\\''")}'`;
 
 /**
- * What to do once for a project whose folder Claude Code does not trust yet: the
- * owner trusts it at Claude Code's own prompt, in a terminal there; the Studio
- * never does it for them.
+ * What to do for a project whose folder Claude Code does not trust, when the
+ * Studio could not record that trust itself (it does for its workspace and every
+ * project in it): trust it at Claude Code's own prompt, in a terminal there.
  */
-function TrustCard({ folder, onRetry }: { folder: string; onRetry?: () => void }) {
+function TrustCard({
+  folder,
+  detail,
+  onRetry,
+}: {
+  folder: string;
+  detail?: string;
+  onRetry?: () => void;
+}) {
   const { t } = useLang();
   const [copied, setCopied] = useState<"folder" | "command" | null>(null);
   const command = `cd ${quoted(folder)} && claude`;
@@ -669,6 +683,11 @@ function TrustCard({ folder, onRetry }: { folder: string; onRetry?: () => void }
         </div>
       )}
       <p className="mt-2 text-[11px] leading-4 text-ink-4">{t("trust_why")}</p>
+      {detail && (
+        <p className="mt-1 break-all text-[11px] leading-4 text-ink-4">
+          {t("trust_detail", { detail })}
+        </p>
+      )}
     </div>
   );
 }

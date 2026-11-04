@@ -110,7 +110,7 @@ export function App() {
    * a button that tries again, once.
    */
   const startFailed = (reason: unknown, again?: () => void) => {
-    const error = reason as Error & { code?: string; location?: string };
+    const error = reason as Error & { code?: string; location?: string; detail?: string };
     if (error.code !== "WORKSPACE_NOT_TRUSTED") {
       say({ from: "studio", text: t("failed_start") + error.message });
       return;
@@ -127,7 +127,7 @@ export function App() {
     id = say({
       from: "studio",
       key: "trust_needed",
-      trust: { folder: error.location || overview?.project.root || "" },
+      trust: { folder: error.location || overview?.project.root || "", detail: error.detail },
       retry,
     });
   };
@@ -167,69 +167,56 @@ export function App() {
     }
   }, []);
 
-  /** The page for the project open now; `fresh` when it was just made in a new folder. */
-  const begin = useCallback(
-    (fresh = false) => {
-      void load().then((data) => {
-        if (!data) return;
-        if (!storedLang()) setLang(data.project.language);
-        say({ from: "studio", key: "welcome" });
-        // A new folder: Claude Code has yet to be told to trust it before a loop can run there.
-        if (fresh) say({ from: "studio", key: "trust_new", trust: { folder: data.project.root } });
-        // A change still going on in the background is picked up where it is.
-        void api
-          .conversations()
-          .then(({ conversations }) => {
-            const open = conversations.find((entry) =>
-              ["running", "waiting"].includes(entry.state),
-            );
-            if (!open) return;
-            setConversation(open.id);
-            if (open.state === "running")
-              pendingMessage.current = say({
-                from: "studio",
-                key: "authoring_resumed",
-                values: { session: open.session },
-                pending: true,
-                progress: open.progress,
-              });
-            setStatus(open);
-          })
-          .catch(() => undefined);
-        // A project opens with its setup loop until it is set up, except one started empty in the
-        // Studio (the framework's own profile, no example): it opens blank, to be built in the chat,
-        // its setup run when the owner picks it.
-        const setup = data.loops.find((loop) => loop.kind === "setup" && loop.source === "project");
-        const startedEmpty = data.project.side === "default" && !data.project.example;
-        if (!data.project.setup_finished && setup && !startedEmpty) {
-          say({ from: "studio", key: "welcome_setup" });
-          void open({ name: setup.name, source: "project" }, true);
-          return;
-        }
-        const chosen = data.project.chosen?.loop;
-        if (
-          chosen &&
-          data.loops.some((loop) => loop.name === chosen && loop.source === "project")
-        ) {
-          say({ from: "studio", key: "welcome_chosen", values: { loop: chosen } });
-          void open({ name: chosen, source: "project" }, true);
-          return;
-        }
-        if (
-          startedEmpty &&
-          !data.loops.some((loop) => loop.source === "project" && !loop.framework)
-        )
-          say({ from: "studio", key: "welcome_empty" });
-      });
-    },
-    [load, say, open],
-  );
+  /** The page for the project open now. */
+  const begin = useCallback(() => {
+    void load().then((data) => {
+      if (!data) return;
+      if (!storedLang()) setLang(data.project.language);
+      say({ from: "studio", key: "welcome" });
+      // A change still going on in the background is picked up where it is.
+      void api
+        .conversations()
+        .then(({ conversations }) => {
+          const open = conversations.find((entry) => ["running", "waiting"].includes(entry.state));
+          if (!open) return;
+          setConversation(open.id);
+          if (open.state === "running")
+            pendingMessage.current = say({
+              from: "studio",
+              key: "authoring_resumed",
+              values: { session: open.session },
+              pending: true,
+              progress: open.progress,
+            });
+          setStatus(open);
+        })
+        .catch(() => undefined);
+      // A project opens with its setup loop until it is set up, except one started empty in the
+      // Studio (the framework's own profile, no example): it opens blank, to be built in the chat,
+      // its setup run when the owner picks it.
+      const setup = data.loops.find((loop) => loop.kind === "setup" && loop.source === "project");
+      const startedEmpty = data.project.side === "default" && !data.project.example;
+      if (!data.project.setup_finished && setup && !startedEmpty) {
+        say({ from: "studio", key: "welcome_setup" });
+        void open({ name: setup.name, source: "project" }, true);
+        return;
+      }
+      const chosen = data.project.chosen?.loop;
+      if (chosen && data.loops.some((loop) => loop.name === chosen && loop.source === "project")) {
+        say({ from: "studio", key: "welcome_chosen", values: { loop: chosen } });
+        void open({ name: chosen, source: "project" }, true);
+        return;
+      }
+      if (startedEmpty && !data.loops.some((loop) => loop.source === "project" && !loop.framework))
+        say({ from: "studio", key: "welcome_empty" });
+    });
+  }, [load, say, open]);
   useEffect(() => {
     begin();
     // Runs once, when the page opens.
   }, []);
   /** Another project was opened, started or copied: everything on the page was the last one's. */
-  const switched = (fresh = false) => {
+  const switched = () => {
     setFlow(null);
     setMessages([]);
     setReferences([]);
@@ -240,7 +227,7 @@ export function App() {
     pendingMessage.current = null;
     handled.current = "";
     setPage("compose");
-    begin(fresh);
+    begin();
   };
 
   const find = async (text: string) => {

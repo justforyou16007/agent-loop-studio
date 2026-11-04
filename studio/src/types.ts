@@ -42,8 +42,8 @@ export interface ChatMessage {
   files?: { name: string; text: string; original: string | null }[];
   /** The roles the loop's run has started so far. */
   progress?: { phase: string; role: string; done: boolean }[];
-  /** A folder Claude Code must be told to trust before loops run in it: the steps, shown with the message. */
-  trust?: { folder: string };
+  /** A folder Claude Code must be told to trust before loops run in it, and why the Studio could not record it. */
+  trust?: { folder: string; detail?: string };
   /** Starts again what could not start, once what stood in the way is gone. */
   retry?: () => void;
 }
