@@ -68,6 +68,8 @@ export interface LoopSummary {
   kind: string;
   description: string;
   chosen: boolean;
+  /** It can be tried for real with loop-trial: its definition declares trial arguments. */
+  trial: boolean;
   steps: number;
   waits: number;
   roles: string[];

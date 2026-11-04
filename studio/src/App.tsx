@@ -580,17 +580,15 @@ export function App() {
                           <Play size={14} /> {t("run_button")}
                         </Button>
                       )}
-                      {flow.loop.source === "project" &&
-                        flow.loop.kind !== "setup" &&
-                        flow.loop.name !== "loop-trial" && (
-                          <Button
-                            onClick={() => void tryIt()}
-                            disabled={status?.state === "running"}
-                            title={t("trial_hint")}
-                          >
-                            <FlaskConical size={14} /> {t("trial_button")}
-                          </Button>
-                        )}
+                      {flow.loop.source === "project" && flow.loop.trial && (
+                        <Button
+                          onClick={() => void tryIt()}
+                          disabled={status?.state === "running"}
+                          title={t("trial_hint")}
+                        >
+                          <FlaskConical size={14} /> {t("trial_button")}
+                        </Button>
+                      )}
                       <Button
                         variant="primary"
                         disabled={flow.loop.kind !== "task"}

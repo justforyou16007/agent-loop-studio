@@ -34,6 +34,7 @@ export function summarize(loop: LoopView): LoopSummary {
     kind: loop.kind,
     description: loop.description,
     chosen: loop.chosen,
+    trial: loop.trial,
     steps: steps.length,
     waits: steps.filter((step) => step.roles.includes("owner-review")).length,
     roles: loop.roles,

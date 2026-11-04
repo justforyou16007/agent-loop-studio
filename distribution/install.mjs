@@ -273,7 +273,7 @@ console.log(
 // What to do next: set the project up, in the Studio or a session; then whatever the package says this profile needs.
 const next = [
   "Next: open claude in the project once and accept the folder trust prompt: background sessions start only in a trusted folder.",
-  `Then set the project up. The Studio, node ${path.join(root, ".contrejour/dist/tools/studio.js")} --project ${root}, opens it with its setup loop, which configures the project and chooses the loop it runs; in a session in the project, claude "Run the setup loop" does the same.`,
+  `Then set the project up. The Studio, node ${path.join(root, ".contrejour/dist/tools/studio.js")} --project ${root}, opens it with its setup loop, which sets up its workflow, the loop it runs and its values; in a session in the project, claude "Run the setup loop" does the same.`,
   ...(packageManifest.profiles[role].next ?? []),
   "Loops and roles already in the project were kept as they are.",
 ];

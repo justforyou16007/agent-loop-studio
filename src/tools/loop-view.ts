@@ -71,6 +71,8 @@ export interface LoopView {
   description: string;
   triggers: string[];
   chosen: boolean;
+  /** Its definition declares trial arguments, so loop-trial can run it for real. */
+  trial: boolean;
   parameters: ParameterView[];
   parameter_problem: string | null;
   purpose: string;
@@ -398,6 +400,7 @@ async function describeLoop(file: LoopFile, context: LoopContext): Promise<LoopV
     description: fields.description ?? "",
     triggers: parseTriggers(fields.triggers),
     chosen: isChosen,
+    trial: Boolean(fields["trial-args"]),
     parameters,
     parameter_problem: problem,
     purpose: section("Purpose"),

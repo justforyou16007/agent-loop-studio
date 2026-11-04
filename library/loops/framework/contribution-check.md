@@ -1,6 +1,6 @@
 ---
 name: contribution-check
-description: The project's own check of exactly what would leave, when its rules ask for one — a step of library-contribution and upstream-optimization. The framework's puts the files to the owner; a package's side gives its projects a check of its own instead.
+description: The project's own check of exactly what would leave, when its rules ask for one — a step of library-contribution. The framework's puts the files to the owner; a package's side gives its projects a check of its own instead.
 side: framework
 kind: on-request
 triggers: record-trajectory, guard-owner-answers
@@ -11,7 +11,7 @@ check-args: [{"digest": "0000000000000000000000000000000000000000000000000000000
 
 ## Purpose
 
-Some projects hold what must never leave them, and say so through their extension: then nothing they share or send upstream leaves before a check of their own has passed exactly those files, recorded on the plan's digest. A package whose projects need a particular check (a leak review against hidden tests, say) gives its side a `contribution-check` of its own, which takes this one's place. This one, for a project that asks for a check and has none of its own, makes the owner the check.
+Some projects hold what must never leave them, and say so through their extension: then nothing they contribute leaves before a check of their own has passed exactly those files, recorded on the plan's digest. A package whose projects need a particular check (a leak review against hidden tests, say) gives its side a `contribution-check` of its own, which takes this one's place. This one, for a project that asks for a check and has none of its own, makes the owner the check.
 
 ## Inputs
 

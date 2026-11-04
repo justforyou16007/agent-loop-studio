@@ -3,7 +3,7 @@ export const meta = {
   description:
     "The project's own check of exactly what would leave, when its rules ask for one: here, the owner reads the files",
   whenToUse:
-    "As a step of library-contribution and upstream-optimization, when the plan says the project's own check is required. Run it with the plan's digest and files, then again with the owner's replies in answers.",
+    "As a step of library-contribution, when the plan says the project's own check is required. Run it with the plan's digest and files, then again with the owner's replies in answers.",
   phases: [{ title: "Check" }, { title: "Record" }],
 };
 
@@ -63,4 +63,4 @@ const recorded = await agent(
 if (recorded.failed) return { verdict: "fail", findings: [recorded.reason] };
 return { verdict, findings };
 
-// contrejour-loop-definition-sha256: d9155b061ff2795a4892e90e829e17ff1519cf659b0219dcfc6af609d2b70a66
+// contrejour-loop-definition-sha256: 2b47f59bacb7e7dedc9862fd1c252be3d7a0500cf993ba0d96814388a55d3e2f
