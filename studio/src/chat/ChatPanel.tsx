@@ -1,28 +1,46 @@
 import {
+  ArrowRight,
   ArrowUp,
   AtSign,
+  Box,
   Check,
   Eye,
   LayoutPanelLeft,
   Loader2,
   PencilLine,
   Search,
+  SlidersHorizontal,
   Sparkles,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Candidate } from "../../../src/tools/studio-types.js";
 import { useLang } from "../i18n.js";
 import { Markdown } from "../Markdown.js";
 import type { LoopRef } from "../PreviewDialog.js";
-import type { ChatMessage, Reference } from "../types.js";
+import type { ChatMessage, Pointable, Reference } from "../types.js";
 import { Badge, Button, cx, LoopBadges } from "../ui.js";
+
+/** The @ being typed just before the caret, and what follows it so far; none inside a word, such as an e-mail address. */
+function mentionAt(text: string, caret: number): { start: number; query: string } | null {
+  const before = text.slice(0, caret);
+  const start = before.lastIndexOf("@");
+  if (start < 0) return null;
+  const query = before.slice(start + 1);
+  if (/\s/.test(query) || query.length > 40) return null;
+  if (start > 0 && /[A-Za-z0-9._%+-]/.test(before[start - 1]!)) return null;
+  return { start, query };
+}
+const squeeze = (text: string): string => text.toLowerCase().replace(/\s+/g, "");
+const KIND_ICONS = { node: Box, edge: ArrowRight, param: SlidersHorizontal } as const;
 
 export function ChatPanel({
   messages,
   references,
+  pointables,
   busy,
   onSend,
+  onReference,
   onRemoveReference,
   onPreview,
   onOpen,
@@ -37,8 +55,11 @@ export function ChatPanel({
 }: {
   messages: ChatMessage[];
   references: Reference[];
+  /** What is on the canvas to point at, for the @ list. */
+  pointables: Pointable[];
   busy: boolean;
   onSend: (text: string) => void;
+  onReference: (reference: Reference) => void;
   onRemoveReference: (id: string) => void;
   onPreview: (target: LoopRef) => void;
   onOpen: (target: LoopRef) => void;
@@ -58,18 +79,75 @@ export function ChatPanel({
   const [draft, setDraft] = useState("");
   const list = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLTextAreaElement>(null);
+  const options = useRef<HTMLUListElement>(null);
+  /** The @ being typed, while its list is open. */
+  const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
+  const [active, setActive] = useState(0);
+  /** Where the @ whose list the owner closed with Esc is: it stays closed until another @ is typed. */
+  const dismissed = useRef<number | null>(null);
   useEffect(() => {
     list.current?.scrollTo({ top: list.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
   useEffect(() => {
     if (references.length) box.current?.focus();
   }, [references.length]);
+  const matches = useMemo(() => {
+    if (!mention) return [];
+    const query = squeeze(mention.query);
+    return pointables.filter((item) =>
+      squeeze(`${item.label} ${item.detail} ${t(`ref_${item.kind}`)}`).includes(query),
+    );
+  }, [mention, pointables, t]);
+  const pointed = useMemo(() => new Set(references.map((entry) => entry.id)), [references]);
+  useEffect(() => {
+    options.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+  }, [active, mention]);
+
+  /** Open, follow or close the @ list as the text and the caret move. */
+  const follow = (text: string, caret: number) => {
+    if (dismissed.current !== null && text[dismissed.current] !== "@") dismissed.current = null;
+    const found = mentionAt(text, caret);
+    setMention(found && found.start !== dismissed.current ? found : null);
+    setActive(0);
+  };
+  /** The chosen item: pointed at, as a click on the canvas would, and named in the sentence in place of what was typed. */
+  const choose = (item: Pointable) => {
+    if (!mention) return;
+    const named = `@${item.label} `;
+    const end = mention.start + 1 + mention.query.length;
+    const next = draft.slice(0, mention.start) + named + draft.slice(end);
+    const caret = mention.start + named.length;
+    setDraft(next);
+    setMention(null);
+    onReference({ kind: item.kind, id: item.id, label: item.label });
+    requestAnimationFrame(() => {
+      box.current?.focus();
+      box.current?.setSelectionRange(caret, caret);
+    });
+  };
+  /** The @ button: an @ at the caret, which opens the list. */
+  const startMention = () => {
+    const field = box.current;
+    const at = field?.selectionStart ?? draft.length;
+    const end = field?.selectionEnd ?? at;
+    const typed = at > 0 && /[A-Za-z0-9._%+-]/.test(draft[at - 1]!) ? " @" : "@";
+    const next = draft.slice(0, at) + typed + draft.slice(end);
+    const caret = at + typed.length;
+    setDraft(next);
+    dismissed.current = null;
+    follow(next, caret);
+    requestAnimationFrame(() => {
+      field?.focus();
+      field?.setSelectionRange(caret, caret);
+    });
+  };
 
   const send = () => {
     const text = draft.trim();
     if ((!text && !references.length) || busy) return;
     onSend(text);
     setDraft("");
+    setMention(null);
   };
   const onlyWelcome =
     messages.length <= 2 && messages.every((message) => message.from === "studio");
@@ -148,7 +226,69 @@ export function ChatPanel({
             ))}
           </div>
         )}
-        <div className="rounded-xl border border-line-strong bg-white shadow-card focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-100">
+        <div className="relative rounded-xl border border-line-strong bg-white shadow-card focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-100">
+          {mention && (
+            <div className="absolute inset-x-0 bottom-full z-20 mb-2 overflow-hidden rounded-xl border border-line bg-panel shadow-float">
+              {pointables.length === 0 || matches.length === 0 ? (
+                <p className="px-3 py-2.5 text-xs text-ink-4">
+                  {t(pointables.length === 0 ? "mention_empty" : "mention_none")}
+                </p>
+              ) : (
+                <ul
+                  ref={options}
+                  role="listbox"
+                  className="scroll-thin max-h-64 overflow-y-auto py-1"
+                >
+                  {matches.map((item, index) => {
+                    const Icon = KIND_ICONS[item.kind];
+                    return (
+                      <li
+                        key={item.id}
+                        role="option"
+                        aria-selected={index === active}
+                        onMouseDown={(event) => {
+                          // Chosen before the text box loses the caret.
+                          event.preventDefault();
+                          choose(item);
+                        }}
+                        onMouseEnter={() => setActive(index)}
+                        className={cx(
+                          "flex cursor-pointer items-center gap-2 px-3 py-1.5",
+                          index === active ? "bg-brand-50" : "hover:bg-canvas",
+                        )}
+                      >
+                        <Icon size={13} className="shrink-0 text-ink-4" />
+                        <span className="min-w-0 flex-1">
+                          <span
+                            className={cx(
+                              "block truncate text-[13px]",
+                              index === active ? "text-brand-700" : "text-ink-2",
+                            )}
+                          >
+                            {item.label}
+                          </span>
+                          {item.detail && (
+                            <span className="block truncate text-[11px] text-ink-4">
+                              {item.detail}
+                            </span>
+                          )}
+                        </span>
+                        <span className="shrink-0 text-[11px] text-ink-4">
+                          {t(`ref_${item.kind}`)}
+                        </span>
+                        {pointed.has(item.id) && (
+                          <Check size={12} className="shrink-0 text-brand-600" />
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              <div className="border-t border-line px-3 py-1 text-[11px] text-ink-4">
+                {t("mention_hint")}
+              </div>
+            </div>
+          )}
           {references.length > 0 && (
             <div className="flex flex-wrap gap-1 px-2.5 pt-2.5">
               {references.map((reference) => (
@@ -174,10 +314,37 @@ export function ChatPanel({
             ref={box}
             value={draft}
             rows={3}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              follow(event.target.value, event.target.selectionStart ?? event.target.value.length);
+            }}
+            onSelect={(event) =>
+              follow(event.currentTarget.value, event.currentTarget.selectionStart ?? 0)
+            }
+            onBlur={() => setMention(null)}
             onKeyDown={(event) => {
-              // Enter also confirms a Chinese input method's candidate: only send when nothing is being composed.
-              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+              // A Chinese input method's keys pick its own candidates: nothing here while it composes.
+              if (event.nativeEvent.isComposing) return;
+              if (mention) {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  dismissed.current = mention.start;
+                  setMention(null);
+                  return;
+                }
+                if (matches.length && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+                  event.preventDefault();
+                  const step = event.key === "ArrowDown" ? 1 : matches.length - 1;
+                  setActive((current) => (current + step) % matches.length);
+                  return;
+                }
+                if (matches.length && (event.key === "Enter" || event.key === "Tab")) {
+                  event.preventDefault();
+                  choose(matches[Math.min(active, matches.length - 1)]!);
+                  return;
+                }
+              }
+              if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
                 send();
               }
@@ -191,7 +358,16 @@ export function ChatPanel({
             )}
             className="block w-full resize-none bg-transparent px-3 py-2.5 text-[13px] leading-5 outline-none placeholder:text-ink-4"
           />
-          <div className="flex justify-end px-2 pb-2">
+          <div className="flex items-center justify-between px-2 pb-2">
+            <button
+              type="button"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={startMention}
+              title={t("mention_button")}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-ink-3 hover:bg-canvas hover:text-brand-600"
+            >
+              <AtSign size={16} />
+            </button>
             <button
               type="button"
               onClick={send}

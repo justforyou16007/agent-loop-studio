@@ -2,6 +2,7 @@ import type {
   AuthoringStatus,
   CanvasPointer,
   Flow,
+  FolderListing,
   LoopDetail,
   LoopSource,
   Overview,
@@ -74,6 +75,14 @@ export const api = {
     post<{ current: string }>("/api/projects/new", { name, reference }),
   copyProject: (from: string, name: string) =>
     post<{ current: string }>("/api/projects/copy", { from, name }),
+  deleteProject: (name: string) =>
+    post<{ deleted: string; current: string | null }>("/api/projects/delete", { name }),
+  folders: (path?: string) => get<FolderListing>(`/api/projects/folders?${query({ path })}`),
+  useWorkspace: (path: string, create: boolean) =>
+    post<{ workspace: string; current: string | null }>("/api/projects/workspace", {
+      path,
+      create,
+    }),
   use: (name: string, params: Record<string, unknown>) =>
     post<{ loop: string; params: Record<string, unknown>; added: string[] }>("/api/use", {
       name,

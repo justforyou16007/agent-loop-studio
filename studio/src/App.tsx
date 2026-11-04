@@ -18,7 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AuthoringStatus, Flow, Overview } from "../../src/tools/studio-types.js";
 import { api } from "./api.js";
 import { Inspector } from "./canvas/Inspector.js";
-import { FlowCanvas } from "./canvas/FlowCanvas.js";
+import { FlowCanvas, pointablesOf } from "./canvas/FlowCanvas.js";
 import { ChatPanel } from "./chat/ChatPanel.js";
 import { LangContext, translate, useLang, type Lang, type TextKey } from "./i18n.js";
 import { ParamsDialog, RoleDraftDialog, RunDialog } from "./dialogs.js";
@@ -432,6 +432,8 @@ export function App() {
   const current: LoopRef | null = flow ? { name: flow.loop.name, source: flow.loop.source } : null;
   const draft = status?.state === "waiting" ? (status.draft?.flow ?? null) : null;
   const shown = draft && !showOriginal ? draft : flow;
+  /** What the chat's @ list offers: what the canvas shows now. */
+  const pointables = useMemo(() => (shown ? pointablesOf(shown, t) : []), [shown, t]);
   const activity = useMemo(() => {
     const map = new Map<string, "running" | "done">();
     if (status?.purpose !== "run" || status.state !== "running" || status.loop !== flow?.loop.name)
@@ -532,8 +534,10 @@ export function App() {
                 <ChatPanel
                   messages={messages}
                   references={references}
+                  pointables={pointables}
                   busy={busy}
                   onSend={(text) => void send(text)}
+                  onReference={point}
                   onRemoveReference={(id) =>
                     setReferences((list) => list.filter((entry) => entry.id !== id))
                   }

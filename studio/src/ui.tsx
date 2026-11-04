@@ -80,7 +80,7 @@ export function Button({
   className,
   ...rest
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "primary" | "secondary" | "ghost";
+  variant?: "primary" | "secondary" | "ghost" | "danger";
   size?: "sm" | "md";
 }) {
   return (
@@ -94,6 +94,7 @@ export function Button({
         variant === "secondary" &&
           "border border-line-strong bg-white text-ink-2 shadow-card hover:bg-canvas",
         variant === "ghost" && "text-ink-3 hover:bg-canvas hover:text-ink-2",
+        variant === "danger" && "bg-bad-600 text-white shadow-card hover:opacity-90",
         className,
       )}
     />

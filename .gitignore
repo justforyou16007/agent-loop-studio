@@ -12,5 +12,7 @@ coverage/
 __pycache__/
 .pytest_cache/
 .DS_Store
-# The community library, cloned here to reuse and contribute its loops and roles.
+# The community library, cloned here: the published projects new ones can start from.
 /agent-loop-community/
+# What the Studio remembers on this machine: the workspace chosen last.
+/.studio-settings.json

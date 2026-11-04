@@ -199,4 +199,15 @@ export interface ProjectsInfo {
   can_create: boolean;
   /** Whether the community library is beside the Studio's checkout, so its published projects can be started from. */
   community: { present: boolean };
+  /** Other workspaces used before on this machine, the latest first. */
+  recent_workspaces: string[];
+}
+
+/** A folder, as the owner browses for a workspace: the folders in it, and how many projects it holds. */
+export interface FolderListing {
+  path: string;
+  parent: string | null;
+  exists: boolean;
+  folders: { name: string; path: string }[];
+  projects: number;
 }

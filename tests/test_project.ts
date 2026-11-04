@@ -1,8 +1,9 @@
 /**
  * A project built with the framework alone, as the owner meets it: installed
  * from the framework's own package, started in the Studio from a reference
- * project, copied, its loops checked, its hooks recording trajectories and
- * guarding the owner's answers, its contribution waiting for a finished task.
+ * project, copied and deleted, its workspace switched, its loops checked, its
+ * hooks recording trajectories and guarding the owner's answers, published to
+ * the community once a task has finished and started from there.
  * No project package is involved. Run `npm run build` first.
  */
 import assert from "node:assert/strict";
@@ -73,11 +74,29 @@ try {
   assert.notEqual(refused.status, 0);
   assert.match(refused.stderr, /--role default/);
 
-  // --- the Studio starts, opens and copies projects in a workspace ---
+  // --- the Studio starts, opens, copies and deletes projects in a workspace, and switches workspaces ---
   const { serveStudio } = (await import(pathToFileURL(path.join(source, "dist/tools/studio.js")).href)) as {
-    serveStudio(root: string, options?: { port?: number; workspace?: string; library?: string }): Promise<{ url: string; loginUrl: string; close(): Promise<void> }>;
+    serveStudio(
+      root: string,
+      options?: { port?: number; workspace?: string; library?: string; settings?: string; session?: { claude_command?: string[] } },
+    ): Promise<{ url: string; loginUrl: string; close(): Promise<void> }>;
   };
-  const studio = await serveStudio("", { port: 0, workspace, library: source });
+  // Claude Code's command, stood in for: it lists the background sessions a file says, and records each it is told to stop.
+  const agentsFile = path.join(sandbox, "fake-agents.json");
+  const stoppedFile = path.join(sandbox, "fake-stopped.log");
+  const fakeClaude = path.join(sandbox, "fake-claude.mjs");
+  fs.writeFileSync(agentsFile, "[]");
+  fs.writeFileSync(
+    fakeClaude,
+    `import fs from "node:fs";
+const [command, ...rest] = process.argv.slice(2);
+if (command === "agents") process.stdout.write(fs.readFileSync(${JSON.stringify(agentsFile)}, "utf8"));
+else if (command === "stop") fs.appendFileSync(${JSON.stringify(stoppedFile)}, rest[0] + "\\n");
+else { process.stderr.write("not stood in for: " + command); process.exit(1); }
+`,
+  );
+  const settingsFile = path.join(sandbox, "studio-settings.json");
+  const studio = await serveStudio("", { port: 0, workspace, library: source, settings: settingsFile, session: { claude_command: [process.execPath, fakeClaude] } });
   try {
     const at = (relative: string) => new URL(relative, studio.url).href;
     const cookie = String((await request(studio.loginUrl)).headers["set-cookie"]).split(";")[0]!;
@@ -85,6 +104,7 @@ try {
     let projects = JSON.parse((await request(at("api/projects"), { cookie })).body);
     assert.equal(projects.current, null);
     assert.deepEqual(projects.projects.map((entry: { name: string }) => entry.name), ["plain"]);
+    assert.deepEqual(projects.recent_workspaces, []);
     assert.ok(projects.can_create);
     assert.equal(projects.references[0].name, "iterate-and-check");
     assert.ok(projects.references[0].title.zh && projects.references[0].description.en);
@@ -142,6 +162,54 @@ try {
     assert.equal((await request(at("api/projects/open"), { cookie, method: "POST", body: { name: "first" } })).status, 200);
     assert.equal(JSON.parse((await request(at("api/overview"), { cookie })).body).project.name, "first");
     assert.equal((await request(at("api/projects/open"), { cookie, method: "POST", body: { name: "nope" } })).status, 404);
+
+    // The folders to choose a workspace from: full paths only.
+    const listing = JSON.parse((await request(at(`api/projects/folders?path=${encodeURIComponent(workspace)}`), { cookie })).body);
+    assert.deepEqual([listing.path, listing.exists, listing.projects], [workspace, true, 3]);
+    assert.ok(listing.folders.some((folder: { name: string; path: string }) => folder.name === "first" && folder.path === first));
+    assert.equal((await request(at("api/projects/folders?path=relative%2Fdir"), { cookie })).status, 400);
+    const nowhere = JSON.parse((await request(at(`api/projects/folders?path=${encodeURIComponent(path.join(sandbox, "nowhere"))}`), { cookie })).body);
+    assert.deepEqual([nowhere.exists, nowhere.folders], [false, []]);
+
+    // A project deleted: never while a loop the Studio started works in it; then the sessions only waiting in it are stopped and its folder goes.
+    assert.equal((await request(at("api/projects/delete"), { cookie, method: "POST", body: { name: "nope" } })).status, 404);
+    const session = { id: "abc123", session_id: "session-1", name: "run" };
+    fs.mkdirSync(path.join(second, ".contrejour/studio"), { recursive: true });
+    fs.writeFileSync(
+      path.join(second, ".contrejour/studio/conversations.json"),
+      JSON.stringify({ schema_version: 1, conversations: [{ id: "c1", loop: "iterate-and-check", base: null, session, started_at: "2026-11-04T00:00:00.000Z", sent: [] }] }),
+    );
+    fs.writeFileSync(agentsFile, JSON.stringify([{ id: "abc123", sessionId: "session-1", status: "busy" }]));
+    const working = await request(at("api/projects/delete"), { cookie, method: "POST", body: { name: "second" } });
+    assert.equal(working.status, 409, working.body);
+    assert.match(JSON.parse(working.body).error, /abc123/);
+    assert.ok(fs.existsSync(second));
+    fs.writeFileSync(agentsFile, JSON.stringify([{ id: "abc123", sessionId: "session-1", status: "done" }]));
+    const deleted = await request(at("api/projects/delete"), { cookie, method: "POST", body: { name: "second" } });
+    assert.equal(deleted.status, 200, deleted.body);
+    assert.equal(fs.existsSync(second), false);
+    assert.equal(fs.readFileSync(stoppedFile, "utf8"), "abc123\n", "the session waiting in it was stopped");
+    assert.equal(JSON.parse(deleted.body).current, "first", "the project open stays open");
+    // The project open now, deleted: none is open after it.
+    assert.equal((await request(at("api/projects/new"), { cookie, method: "POST", body: { name: "doomed", reference: null } })).status, 200);
+    assert.equal(JSON.parse((await request(at("api/projects/delete"), { cookie, method: "POST", body: { name: "doomed" } })).body).current, null);
+    assert.equal((await request(at("api/overview"), { cookie })).status, 409);
+    assert.equal(fs.existsSync(path.join(workspace, "doomed")), false);
+
+    // Another workspace: a full path, created only when asked, remembered for the next start.
+    const other = path.join(sandbox, "other-workspace");
+    assert.equal((await request(at("api/projects/workspace"), { cookie, method: "POST", body: { path: "relative" } })).status, 400);
+    assert.equal((await request(at("api/projects/workspace"), { cookie, method: "POST", body: { path: other } })).status, 404);
+    assert.equal(fs.existsSync(other), false);
+    assert.equal((await request(at("api/projects/open"), { cookie, method: "POST", body: { name: "first" } })).status, 200);
+    const moved = await request(at("api/projects/workspace"), { cookie, method: "POST", body: { path: other, create: true } });
+    assert.equal(moved.status, 200, moved.body);
+    assert.deepEqual(JSON.parse(moved.body), { workspace: other, current: null }, "the project open was in the workspace left");
+    projects = JSON.parse((await request(at("api/projects"), { cookie })).body);
+    assert.deepEqual([projects.workspace, projects.projects, projects.recent_workspaces], [other, [], [workspace]]);
+    assert.deepEqual(read(settingsFile), { workspace: other, recent: [workspace] });
+    assert.equal(JSON.parse((await request(at("api/projects/workspace"), { cookie, method: "POST", body: { path: workspace } })).body).workspace, workspace);
+    assert.deepEqual(JSON.parse((await request(at("api/projects"), { cookie })).body).recent_workspaces, [other]);
   } finally {
     await studio.close();
   }

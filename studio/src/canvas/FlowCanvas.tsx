@@ -16,7 +16,7 @@ import {
 import { useEffect, useMemo, useRef } from "react";
 import type { Flow, FlowNode } from "../../../src/tools/studio-types.js";
 import { useLang } from "../i18n.js";
-import type { Reference } from "../types.js";
+import type { Pointable, Reference } from "../types.js";
 import { aside, layoutFlow, paramId, type Size } from "./layout.js";
 import { nodeTypes, type ParamData, type StepData } from "./nodes.js";
 
@@ -24,10 +24,48 @@ const GRAY = "#98a2b3";
 const BRAND = "#3b6ff5";
 const WAIT = "#f38744";
 
-export function nodeLabel(node: FlowNode, t: ReturnType<typeof useLang>["t"]): string {
+type Translate = ReturnType<typeof useLang>["t"];
+
+export function nodeLabel(node: FlowNode, t: Translate): string {
   if (node.kind === "start") return t("start");
   if (node.kind === "end") return t("end");
   return `${t("step_n", { n: node.number ?? "" })}${node.title ? ` · ${node.title}` : ""}`;
+}
+
+/** An arrow, as the owner points at it: from which box to which. */
+export function edgeLabel(flow: Flow, id: string, t: Translate): string {
+  const edge = flow.edges.find((entry) => entry.id === id);
+  if (!edge) return id;
+  const from = flow.nodes.find((node) => node.id === edge.from);
+  const to = flow.nodes.find((node) => node.id === edge.to);
+  return t("edge_ref", {
+    from: from ? nodeLabel(from, t) : edge.from,
+    to: to ? nodeLabel(to, t) : edge.to,
+  });
+}
+
+/** Everything on the canvas the owner can point at in the chat, named as clicking it names it. */
+export function pointablesOf(flow: Flow, t: Translate): Pointable[] {
+  return [
+    ...flow.nodes.map((node) => ({
+      kind: "node" as const,
+      id: node.id,
+      label: nodeLabel(node, t),
+      detail: "",
+    })),
+    ...flow.params.map((param) => ({
+      kind: "param" as const,
+      id: paramId(param.name),
+      label: param.name,
+      detail: param.description,
+    })),
+    ...flow.edges.map((edge) => ({
+      kind: "edge" as const,
+      id: edge.id,
+      label: edgeLabel(flow, edge.id, t),
+      detail: edge.label,
+    })),
+  ];
 }
 
 interface CanvasProps {
@@ -146,7 +184,6 @@ function Canvas({
     );
   }, [referenced, selected, activity, setNodes]);
 
-  const byId = useMemo(() => new Map(flow.nodes.map((node) => [node.id, node])), [flow]);
   const edges = useMemo<Edge[]>(() => {
     // Arrows around the side each get their own lane, so they do not lie on top of one another.
     const lanes = new Map(flow.edges.filter(aside).map((edge, index) => [edge.id, index]));
@@ -195,17 +232,6 @@ function Canvas({
     return out;
   }, [flow, referenced]);
 
-  const edgeLabel = (id: string): string => {
-    const edge = flow.edges.find((entry) => entry.id === id);
-    if (!edge) return id;
-    const from = byId.get(edge.from);
-    const to = byId.get(edge.to);
-    return t("edge_ref", {
-      from: from ? nodeLabel(from, t) : edge.from,
-      to: to ? nodeLabel(to, t) : edge.to,
-    });
-  };
-
   return (
     <ReactFlow
       nodes={nodes}
@@ -227,7 +253,7 @@ function Canvas({
       }}
       onEdgeClick={(_, edge) => {
         if (preview || edge.id.startsWith("p:")) return;
-        onReference?.({ kind: "edge", id: edge.id, label: edgeLabel(edge.id) });
+        onReference?.({ kind: "edge", id: edge.id, label: edgeLabel(flow, edge.id, t) });
       }}
       onPaneClick={() => onSelect?.(null)}
     >

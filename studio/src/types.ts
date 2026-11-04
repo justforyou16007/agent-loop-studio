@@ -4,6 +4,10 @@ export interface Reference {
   id: string;
   label: string;
 }
+/** What the chat's @ list offers: a reference, with what tells it apart (an arrow's condition, a parameter's meaning). */
+export interface Pointable extends Reference {
+  detail: string;
+}
 
 export interface ChatMessage {
   id: number;

@@ -20,10 +20,12 @@ import {
   loopResults,
   ownerWait,
   readTranscript,
+  runClaude,
   runProgress,
   sessionControl,
   sessionState,
   startSession,
+  stopArgv,
   transcriptPath,
   type BackgroundSession,
   type SessionOptions,
@@ -230,6 +232,33 @@ async function draftOf(
     roles: draft.roles,
     files,
   };
+}
+
+/**
+ * Before a project's folder is deleted: the sessions the Studio started in it
+ * that are still working, which keep the folder. When none is, the ones whose
+ * process only waits (for the owner, say) are stopped, since their folder goes.
+ */
+export async function releaseSessions(
+  projectRoot: string,
+  options: SessionOptions,
+): Promise<string[]> {
+  const root = path.resolve(projectRoot);
+  const sessions = new Map(readStore(root).map((entry) => [entry.session.id, entry.session]));
+  if (!sessions.size) return [];
+  const listed = await listSessions(options, root);
+  const states = [...sessions.values()].map((session) => ({
+    session,
+    state: sessionState(listed.find((entry) => entry.id === session.id)),
+  }));
+  const working = states.filter((entry) => entry.state === "running");
+  if (working.length) return working.map((entry) => entry.session.id);
+  for (const { session, state } of states)
+    if (state === "idle") {
+      const stopped = await runClaude(stopArgv(options, session), root);
+      if (!stopped.ok) throw new Error(`claude stop failed: ${stopped.stderr}`);
+    }
+  return [];
 }
 
 /** How each recent conversation stands: working, waiting for the owner (with the note and the draft), or ended. */

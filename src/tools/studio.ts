@@ -21,17 +21,25 @@ import { collectView, fingerprint, type ViewData } from "./loop-view.js";
 import type { SessionOptions } from "./sessions.js";
 import { COMMUNITY_LIBRARY, COMMUNITY_URL, installedLibrary } from "./installation.js";
 import { useLoop } from "./project-loop.js";
+import { writeStateJsonAtomic } from "./state-file.js";
 import { copyProject, createProject, listProjects, listReferences } from "./workspace.js";
 import {
   answerConversation,
   conversationStatuses,
+  releaseSessions,
   runLoop,
   startConversation,
   type AuthoringLoop,
   type Pointer,
   trialLoop,
 } from "./studio-authoring.js";
-import type { LoopDetail, Overview, RoleDetail } from "./studio-types.js";
+import type {
+  FolderListing,
+  LoopDetail,
+  Overview,
+  ProjectsInfo,
+  RoleDetail,
+} from "./studio-types.js";
 import { isRecord } from "./validate.js";
 
 const ASSETS = fileURLToPath(new URL("../studio/", import.meta.url));
@@ -127,6 +135,71 @@ const pointersOf = (value: unknown): Pointer[] =>
         }))
     : [];
 
+const isDirectory = (file: string): boolean => {
+  try {
+    return fs.statSync(file).isDirectory();
+  } catch {
+    return false;
+  }
+};
+/** A folder the owner typed: `~` is their home folder; anything else must be a full path. */
+function fullPath(value: string): string | null {
+  const typed = value.trim();
+  const expanded =
+    typed === "~"
+      ? os.homedir()
+      : /^~[\\/]/.test(typed)
+        ? path.join(os.homedir(), typed.slice(2))
+        : typed;
+  return expanded && path.isAbsolute(expanded) ? path.resolve(expanded) : null;
+}
+/** The folders in a folder, for the owner choosing a workspace: never its files, nor hidden folders. */
+function folderListing(where: string): FolderListing {
+  const exists = isDirectory(where);
+  let folders: FolderListing["folders"] = [];
+  let projects = 0;
+  if (exists)
+    try {
+      folders = fs
+        .readdirSync(where, { withFileTypes: true })
+        .filter(
+          (entry) =>
+            !entry.name.startsWith(".") &&
+            (entry.isDirectory() ||
+              (entry.isSymbolicLink() && isDirectory(path.join(where, entry.name)))),
+        )
+        .map((entry) => ({ name: entry.name, path: path.join(where, entry.name) }))
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .slice(0, 500);
+      projects = listProjects(where).length;
+    } catch {
+      // A folder this account cannot read shows nothing inside.
+    }
+  const parent = path.dirname(where);
+  return { path: where, parent: parent === where ? null : parent, exists, folders, projects };
+}
+
+/** What the Studio remembers on this machine between starts: the workspace chosen last, and those used before. */
+export interface Remembered {
+  workspace: string | null;
+  recent: string[];
+}
+export function readRemembered(file: string | undefined): Remembered {
+  try {
+    const parsed: unknown = file ? JSON.parse(fs.readFileSync(file, "utf8")) : null;
+    if (isRecord(parsed))
+      return {
+        workspace: typeof parsed.workspace === "string" ? parsed.workspace : null,
+        recent: Array.isArray(parsed.recent)
+          ? parsed.recent.filter((entry): entry is string => typeof entry === "string")
+          : [],
+      };
+  } catch {
+    // Nothing remembered yet, or not readable: start afresh.
+  }
+  return { workspace: null, recent: [] };
+}
+
 export interface Studio {
   url: string;
   /** Opens the Studio once: the first browser to use it is signed in, and the link stops working. */
@@ -145,14 +218,17 @@ export async function serveStudio(
     workspace?: string;
     /** The library checkout new projects are installed from, when no project names one. */
     library?: string;
+    /** The file where the Studio remembers the workspace the owner chose, for its next start. */
+    settings?: string;
   } = {},
 ): Promise<Studio> {
   let root = projectRoot ? path.resolve(projectRoot) : "";
-  const workspace = options.workspace
+  let workspace = options.workspace
     ? path.resolve(options.workspace)
     : root
       ? path.dirname(root)
       : "";
+  let recent = readRemembered(options.settings).recent;
   const host = options.host ?? "127.0.0.1";
   if (!LOOPBACK.has(host))
     throw new Error(
@@ -289,7 +365,7 @@ export async function serveStudio(
     }
   }
 
-  /** The workspace's projects: list them with the reference projects, open one, start one, copy one. */
+  /** The workspace's projects: list them with the reference projects, open, start, copy or delete one, or switch to another workspace. */
   async function projects(
     request: http.IncomingMessage,
     url: URL,
@@ -298,20 +374,31 @@ export async function serveStudio(
   ): Promise<void> {
     const library = options.library ?? (root ? installedLibrary(root) : null) ?? null;
     const community = library ? path.join(library, COMMUNITY_LIBRARY) : null;
-    if (request.method === "GET" || request.method === "HEAD")
-      return json(
-        response,
-        200,
-        {
-          workspace,
-          current: root ? path.basename(root) : null,
-          projects: workspace ? listProjects(workspace) : [],
-          references: listReferences(library),
-          can_create: Boolean(workspace && library),
-          community: { present: Boolean(community && fs.existsSync(path.join(community, ".git"))) },
-        },
-        head,
-      );
+    if (request.method === "GET" || request.method === "HEAD") {
+      // The folders the owner browses for a workspace.
+      if (url.pathname === "/api/projects/folders") {
+        const asked = url.searchParams.get("path");
+        const where = asked ? fullPath(asked) : workspace || os.homedir();
+        if (!where)
+          return json(
+            response,
+            400,
+            { error: "give the folder's full path, such as /home/you/projects or ~/projects" },
+            head,
+          );
+        return json(response, 200, folderListing(where), head);
+      }
+      const info: ProjectsInfo = {
+        workspace,
+        current: root ? path.basename(root) : null,
+        projects: workspace ? listProjects(workspace) : [],
+        references: listReferences(library),
+        can_create: Boolean(workspace && library),
+        community: { present: Boolean(community && fs.existsSync(path.join(community, ".git"))) },
+        recent_workspaces: recent.filter((entry) => entry !== workspace && isDirectory(entry)),
+      };
+      return json(response, 200, info, head);
+    }
     // The community library, beside the Studio's checkout: its published projects are the examples to start from.
     if (url.pathname === "/api/projects/community") {
       if (!library || !community)
@@ -335,8 +422,60 @@ export async function serveStudio(
     }
     const body = await readBody(request);
     const name = typeof body.name === "string" ? body.name : "";
+    // Another folder of projects: the project open now stays open only if it is in it.
+    if (url.pathname === "/api/projects/workspace") {
+      const where = fullPath(typeof body.path === "string" ? body.path : "");
+      if (!where)
+        return json(response, 400, {
+          error: "give the folder's full path, such as /home/you/projects or ~/projects",
+        });
+      if (fs.existsSync(where) && !isDirectory(where))
+        return json(response, 400, { error: `${where} is a file, not a folder` });
+      if (!fs.existsSync(where)) {
+        if (body.create !== true) return json(response, 404, { error: `${where} does not exist` });
+        fs.mkdirSync(where, { recursive: true });
+      }
+      if (workspace && workspace !== where)
+        recent = [workspace, ...recent.filter((entry) => entry !== workspace)];
+      recent = recent.filter((entry) => entry !== where).slice(0, 8);
+      workspace = where;
+      if (root && path.dirname(root) !== workspace) root = "";
+      cache = null;
+      if (options.settings)
+        try {
+          writeStateJsonAtomic(options.settings, { workspace, recent });
+        } catch {
+          // Not remembered for the next start; this one still uses it.
+        }
+      return json(response, 200, { workspace, current: root ? path.basename(root) : null });
+    }
     if (!workspace)
       return json(response, 400, { error: "the Studio was started without a workspace" });
+    // A project's folder, deleted with everything in it, once no loop works there any more.
+    if (url.pathname === "/api/projects/delete") {
+      const found = listProjects(workspace).find((entry) => entry.name === name);
+      if (!found) return json(response, 404, { error: `no project ${name} in ${workspace}` });
+      if (fs.lstatSync(found.root).isSymbolicLink())
+        return json(response, 400, {
+          error: `${found.root} is a link to a folder elsewhere: remove it by hand`,
+        });
+      let working: string[];
+      try {
+        working = await releaseSessions(found.root, sessionOptions);
+      } catch (error) {
+        return json(response, 502, {
+          error: `could not ask Claude Code whether a loop still works in ${name}: ${(error as Error).message}`,
+        });
+      }
+      if (working.length)
+        return json(response, 409, {
+          error: `a loop is still working in ${name} (session ${working.join(", ")}): wait until it stops, then delete the project`,
+        });
+      fs.rmSync(found.root, { recursive: true, force: true, maxRetries: 3 });
+      if (root === path.resolve(found.root)) root = "";
+      cache = null;
+      return json(response, 200, { deleted: name, current: root ? path.basename(root) : null });
+    }
     try {
       if (url.pathname === "/api/projects/open") {
         const found = listProjects(workspace).find((entry) => entry.name === name);
@@ -556,9 +695,10 @@ function studioCheckout(): string | null {
     return null;
   }
 }
-/** Where the Studio keeps its projects unless told otherwise. */
-const defaultWorkspace = (): string =>
-  process.env.AGENT_LOOP_WORKSPACE || path.join(os.homedir(), "agent-loop-projects");
+/** Where the Studio keeps its projects unless told otherwise: the workspace the owner chose last, or ~/agent-loop-projects. */
+const defaultWorkspace = (chosen: string | null): string =>
+  process.env.AGENT_LOOP_WORKSPACE ||
+  (chosen && isDirectory(chosen) ? chosen : path.join(os.homedir(), "agent-loop-projects"));
 
 function cli(): void {
   const program = createCli(
@@ -569,7 +709,7 @@ function cli(): void {
     .option("--project <dir>", "the project to open")
     .option(
       "--workspace <dir>",
-      "the folder of projects to switch between, start and copy (default, from the Studio's checkout: ~/agent-loop-projects, or AGENT_LOOP_WORKSPACE)",
+      "the folder of projects to switch between, start and copy (default, from the Studio's checkout: AGENT_LOOP_WORKSPACE, else the one last chosen in the Studio, else ~/agent-loop-projects)",
     )
     .option(
       "--library <dir>",
@@ -607,17 +747,24 @@ function cli(): void {
             throw new Error(
               "--permission-mode must be bypassPermissions or auto: nobody is there to approve",
             );
-          // Started from the Studio's own checkout, it keeps a workspace of projects and installs them from itself.
+          // Started from the Studio's own checkout, it keeps a workspace of projects, installs them from
+          // itself and remembers there the workspace the owner chooses.
           const checkout = studioCheckout();
+          const settings = checkout ? path.join(checkout, ".studio-settings.json") : undefined;
           const workspace =
             options.workspace ??
-            (options.project ? undefined : checkout ? defaultWorkspace() : undefined);
+            (options.project
+              ? undefined
+              : checkout
+                ? defaultWorkspace(readRemembered(settings).workspace)
+                : undefined);
           if (!options.project && !workspace)
             throw new Error("open a --project, or a --workspace of projects");
           if (workspace) fs.mkdirSync(path.resolve(workspace), { recursive: true });
           const studio = await serveStudio(options.project ?? "", {
             workspace,
             library: options.library ? path.resolve(options.library) : (checkout ?? undefined),
+            settings,
             host: options.host,
             port,
             session: {

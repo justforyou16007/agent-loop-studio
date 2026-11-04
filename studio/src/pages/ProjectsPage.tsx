@@ -1,11 +1,12 @@
-import { Copy, DownloadCloud, FolderOpen, Plus, Send } from "lucide-react";
+import { Copy, DownloadCloud, FolderCog, FolderOpen, Plus, Send, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ProjectsInfo } from "../../../src/tools/studio-types.js";
 import { api } from "../api.js";
+import { DeleteProjectDialog, WorkspaceDialog } from "../dialogs.js";
 import { useLang } from "../i18n.js";
 import { Badge, Button, cx } from "../ui.js";
 
-/** The workspace's projects: open one, copy one, or start one from a reference project. */
+/** The workspace's projects: open, copy or delete one, start one from an example, or switch to another workspace. */
 export function ProjectsPage({ onOpened }: { onOpened: () => void }) {
   const { t, lang } = useLang();
   const [info, setInfo] = useState<ProjectsInfo | null>(null);
@@ -15,6 +16,8 @@ export function ProjectsPage({ onOpened }: { onOpened: () => void }) {
   const [reference, setReference] = useState<string | null>(null);
   const [copying, setCopying] = useState<string | null>(null);
   const [copyName, setCopyName] = useState("");
+  const [deleting, setDeleting] = useState<ProjectsInfo["projects"][number] | null>(null);
+  const [choosing, setChoosing] = useState(false);
   const load = () =>
     api
       .projects()
@@ -40,6 +43,19 @@ export function ProjectsPage({ onOpened }: { onOpened: () => void }) {
     }
   };
   const valid = /^[a-z0-9][a-z0-9._-]{0,63}$/.test(name);
+  /** A deleted project: when it was the one open, the page starts over without one. */
+  const remove = async (project: string) => {
+    await api.deleteProject(project);
+    setDeleting(null);
+    if (project === info?.current) onOpened();
+    else await load();
+  };
+  /** Another workspace: the project open stays open only if it is in it. */
+  const switched = async (result: { workspace: string; current: string | null }) => {
+    setChoosing(false);
+    if (info?.current && !result.current) onOpened();
+    else await load();
+  };
   /** Fetch the community library beside the Studio, or bring it up to date: its projects become examples. */
   const fetchCommunity = async () => {
     setBusy(true);
@@ -58,10 +74,19 @@ export function ProjectsPage({ onOpened }: { onOpened: () => void }) {
     <div className="scroll-thin h-full overflow-y-auto px-8 py-6">
       <div className="mx-auto max-w-5xl space-y-8">
         <section>
-          <h1 className="text-lg font-semibold">{t("projects_title")}</h1>
-          <p className="mt-1 text-[13px] text-ink-3">
-            {t("projects_hint", { workspace: info?.workspace ?? "" })}
-          </p>
+          <div className="flex items-start gap-3">
+            <div className="min-w-0 flex-1">
+              <h1 className="text-lg font-semibold">{t("projects_title")}</h1>
+              <p className="mt-1 text-[13px] text-ink-3">
+                {t("projects_hint", { workspace: info?.workspace ?? "" })}
+              </p>
+            </div>
+            {info && (
+              <Button onClick={() => setChoosing(true)}>
+                <FolderCog size={14} /> {t("workspace_switch")}
+              </Button>
+            )}
+          </div>
           {error && (
             <p className="mt-3 rounded-lg bg-bad-50 px-3 py-2 text-[13px] text-bad-600">{error}</p>
           )}
@@ -149,6 +174,15 @@ export function ProjectsPage({ onOpened }: { onOpened: () => void }) {
                       }}
                     >
                       <Copy size={12} /> {t("project_copy")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={busy}
+                      className="ml-auto hover:bg-bad-50! hover:text-bad-600!"
+                      onClick={() => setDeleting(project)}
+                    >
+                      <Trash2 size={12} /> {t("project_delete")}
                     </Button>
                   </div>
                 )}
@@ -242,6 +276,16 @@ export function ProjectsPage({ onOpened }: { onOpened: () => void }) {
           )}
         </section>
       </div>
+      <DeleteProjectDialog project={deleting} onClose={() => setDeleting(null)} onDelete={remove} />
+      {info && (
+        <WorkspaceDialog
+          open={choosing}
+          current={info.workspace}
+          recent={info.recent_workspaces}
+          onClose={() => setChoosing(false)}
+          onChosen={switched}
+        />
+      )}
     </div>
   );
 }

@@ -1,7 +1,17 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { CheckCircle2, Play, RotateCcw, X } from "lucide-react";
+import {
+  ArrowUp,
+  CheckCircle2,
+  Folder,
+  FolderOpen,
+  Play,
+  RotateCcw,
+  Trash2,
+  X,
+} from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
-import type { Flow, FlowParam } from "../../src/tools/studio-types.js";
+import type { Flow, FlowParam, FolderListing } from "../../src/tools/studio-types.js";
+import { api } from "./api.js";
 import { useLang } from "./i18n.js";
 import { Markdown } from "./Markdown.js";
 import { Badge, Button, cx, formatValue } from "./ui.js";
@@ -290,6 +300,224 @@ export function RoleDraftDialog({
           </div>
         </section>
       ))}
+    </Frame>
+  );
+}
+
+/** Deleting a project: what goes with it, and its name typed to confirm. */
+export function DeleteProjectDialog({
+  project,
+  onClose,
+  onDelete,
+}: {
+  project: { name: string; root: string } | null;
+  onClose: () => void;
+  onDelete: (name: string) => Promise<void>;
+}) {
+  const { t } = useLang();
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setTyped("");
+    setError(null);
+  }, [project]);
+  const name = project?.name ?? "";
+  return (
+    <Frame
+      open={project !== null}
+      onClose={onClose}
+      title={t("project_delete_title", { name })}
+      description={t("project_delete_body", { root: project?.root ?? "" })}
+      footer={
+        <>
+          <Button onClick={onClose}>{t("close")}</Button>
+          <Button
+            variant="danger"
+            disabled={busy || typed !== name}
+            onClick={async () => {
+              setBusy(true);
+              setError(null);
+              try {
+                await onDelete(name);
+              } catch (reason) {
+                setError((reason as Error).message);
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            <Trash2 size={14} /> {t("project_delete_button")}
+          </Button>
+        </>
+      }
+    >
+      <label className="block text-xs text-ink-3">
+        {t("project_delete_confirm", { name })}
+        <input
+          value={typed}
+          onChange={(event) => setTyped(event.target.value)}
+          autoFocus
+          spellCheck={false}
+          className="mt-1 block h-8 w-full rounded-lg border border-line-strong px-2 font-mono text-[13px] outline-none focus:border-bad-600"
+        />
+      </label>
+      {error && (
+        <p className="mt-3 rounded-lg bg-bad-50 px-3 py-2 text-[13px] text-bad-600">{error}</p>
+      )}
+    </Frame>
+  );
+}
+
+/** Choosing the folder of projects: browse to it, type it, or pick one used before. */
+export function WorkspaceDialog({
+  open,
+  current,
+  recent,
+  onClose,
+  onChosen,
+}: {
+  open: boolean;
+  current: string;
+  recent: string[];
+  onClose: () => void;
+  onChosen: (result: { workspace: string; current: string | null }) => Promise<void>;
+}) {
+  const { t } = useLang();
+  const [typed, setTyped] = useState(current);
+  const [listing, setListing] = useState<FolderListing | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const browse = async (where: string): Promise<FolderListing | null> => {
+    setError(null);
+    try {
+      const next = await api.folders(where);
+      setListing(next);
+      setTyped(next.path);
+      return next;
+    } catch (reason) {
+      setError((reason as Error).message);
+      return null;
+    }
+  };
+  useEffect(() => {
+    if (open) void browse(current);
+    // Each time the dialog opens, it starts at the workspace in use.
+  }, [open, current]);
+  /** The folder typed, once listed: a folder that does not exist yet is created only after the owner has seen so. */
+  const use = async () => {
+    setBusy(true);
+    try {
+      let target = listing;
+      if (!target || typed !== target.path) {
+        target = await browse(typed);
+        if (!target?.exists) return;
+      }
+      await onChosen(await api.useWorkspace(target.path, !target.exists));
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const missing = listing !== null && typed === listing.path && !listing.exists;
+  return (
+    <Frame
+      open={open}
+      onClose={onClose}
+      width="min(720px,94vw)"
+      title={t("workspace_title")}
+      description={t("workspace_hint", { workspace: current })}
+      footer={
+        <>
+          <Button onClick={onClose}>{t("close")}</Button>
+          <Button variant="primary" disabled={busy || !typed.trim()} onClick={() => void use()}>
+            <FolderOpen size={14} /> {t(missing ? "workspace_create_use" : "workspace_use")}
+          </Button>
+        </>
+      }
+    >
+      <div className="flex gap-2">
+        <input
+          value={typed}
+          onChange={(event) => setTyped(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              void browse(typed);
+            }
+          }}
+          spellCheck={false}
+          className="h-8 min-w-0 flex-1 rounded-lg border border-line-strong px-2 font-mono text-[13px] outline-none focus:ring-2 focus:ring-brand-100"
+        />
+        <Button onClick={() => void browse(typed)}>{t("workspace_go")}</Button>
+      </div>
+      {error && (
+        <p className="mt-3 rounded-lg bg-bad-50 px-3 py-2 text-[13px] text-bad-600">{error}</p>
+      )}
+      {listing && (
+        <>
+          <div className="mt-3 flex items-center gap-2 text-xs text-ink-3">
+            <Button
+              size="sm"
+              disabled={!listing.parent}
+              onClick={() => listing.parent && void browse(listing.parent)}
+            >
+              <ArrowUp size={12} /> {t("workspace_up")}
+            </Button>
+            <span className="truncate font-mono text-ink-4" title={listing.path}>
+              {listing.path}
+            </span>
+            <span className="ml-auto shrink-0">
+              {!listing.exists
+                ? t("workspace_missing")
+                : listing.projects
+                  ? t("workspace_here_projects", { n: listing.projects })
+                  : t("workspace_here_empty")}
+            </span>
+          </div>
+          {listing.exists && (
+            <ul className="scroll-thin mt-2 max-h-72 overflow-y-auto rounded-xl border border-line py-1">
+              {listing.folders.length === 0 ? (
+                <li className="px-3 py-2 text-xs text-ink-4">{t("workspace_no_folders")}</li>
+              ) : (
+                listing.folders.map((folder) => (
+                  <li key={folder.path}>
+                    <button
+                      type="button"
+                      onClick={() => void browse(folder.path)}
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] text-ink-2 hover:bg-canvas"
+                    >
+                      <Folder size={14} className="shrink-0 text-ink-4" />
+                      <span className="truncate">{folder.name}</span>
+                    </button>
+                  </li>
+                ))
+              )}
+            </ul>
+          )}
+        </>
+      )}
+      {recent.length > 0 && (
+        <div className="mt-4">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-4">
+            {t("workspace_recent")}
+          </div>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {recent.map((entry) => (
+              <button
+                key={entry}
+                type="button"
+                title={entry}
+                onClick={() => void browse(entry)}
+                className="max-w-full truncate rounded-lg border border-line px-2 py-1 font-mono text-[12px] text-ink-2 hover:bg-canvas"
+              >
+                {entry}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </Frame>
   );
 }
