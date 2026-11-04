@@ -1345,7 +1345,7 @@ async function contribute(
   if (!plan.eligible)
     failA1(
       "NO_FINISHED_TASK",
-      "a project contributes once at least one task has finished: one submission whose review ended and whose result was published",
+      "a project contributes once at least one of its tasks has finished, as its rules count them (by default, a run of its task loop)",
     );
   if (!plan.digest)
     failA1("NOTHING_TO_CONTRIBUTE", "this project has nothing new or changed to contribute");
