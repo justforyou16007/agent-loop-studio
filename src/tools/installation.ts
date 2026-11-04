@@ -71,39 +71,33 @@ export function installedLibrary(root: string): string | null {
   return typeof library === "string" && library ? library : null;
 }
 
-/**
- * Where the project's library lives: the checkout it was installed from and, in a
- * project package's checkout, the framework's and the community's libraries it
- * carries as submodules (`agent-loop-studio/`, `agent-loop-community/`). Each
- * holds `library/loops/<side>/` and `library/roles/<side>/`; the first holding a
- * file wins.
- */
 /** The community library: where projects are published, and where the Studio finds the examples to start from. */
 export const COMMUNITY_LIBRARY = "agent-loop-community";
 export const COMMUNITY_URL = "https://github.com/justforyou16007/agent-loop-community.git";
 
+/**
+ * Where the project's library lives: the checkout it was installed from and, in a
+ * project package's checkout, the framework's it carries as a submodule
+ * (`agent-loop-studio/`). Each holds `library/loops/<side>/` and
+ * `library/roles/<side>/`. The community library holds no such folder: it holds
+ * published projects, which reach a project only as the example it starts from.
+ */
 export function libraryRoots(root: string): string[] {
   const library = installedLibrary(root);
   if (!library) return [];
-  return [
-    library,
-    path.join(library, "agent-loop-studio"),
-    path.join(library, "agent-loop-community"),
-  ].filter((candidate) => fs.existsSync(path.join(candidate, "library")));
+  return [library, path.join(library, "agent-loop-studio")].filter((candidate) =>
+    fs.existsSync(path.join(candidate, "library")),
+  );
 }
 
 /**
  * The libraries to look in for a loop or role of a side, the one whose version a
- * project gets first: for a side's own, the checkout the project came from, then
- * the community's; for one any project can use (`framework`), the community's,
- * whose version of a framework loop or role takes the framework's place, then the
- * framework's.
+ * project gets first: for a side's own, the checkout the project came from; for
+ * one any project can use (`framework`), the framework's.
  */
 export function librariesFor(root: string, side: string): string[] {
   const roots = libraryRoots(root);
-  const community = roots.filter((library) => path.basename(library) === "agent-loop-community");
-  const others = roots.filter((library) => !community.includes(library));
-  return side === "framework" ? [...community, ...others.reverse()] : [...others, ...community];
+  return side === "framework" ? roots.reverse() : roots;
 }
 
 export function skillsDir(root: string): string {

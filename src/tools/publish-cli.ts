@@ -975,9 +975,7 @@ async function makePlan(
     sides: sidesOf(root),
     name,
     community,
-    frameworkRoots: libraryRoots(root).filter(
-      (library) => path.basename(library) !== COMMUNITY_LIBRARY,
-    ),
+    frameworkRoots: libraryRoots(root),
     fromExample: exampleFiles(root),
     taken: existing.length > 0 && !ours,
     sent,

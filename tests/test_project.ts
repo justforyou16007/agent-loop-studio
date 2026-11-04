@@ -200,7 +200,8 @@ try {
   git(maintainer, "push", "--quiet", "origin", "main");
   const community = path.join(checkout, "agent-loop-community");
   git(sandbox, "clone", "--quiet", remote, community);
-  const { applyReference, listReferences } = (await import(pathToFileURL(path.join(source, "dist/tools/workspace.js")).href)) as {
+  const { applyExample, applyReference, listReferences } = (await import(pathToFileURL(path.join(source, "dist/tools/workspace.js")).href)) as {
+    applyExample(root: string, dir: string, source: string): { added: string[]; loop: string };
     applyReference(root: string, name: string): { added: string[]; loop: string };
     listReferences(library: string): { name: string; source: string; task_loop: string; params?: Record<string, unknown> }[];
   };
@@ -254,6 +255,11 @@ try {
   assert.ok(fs.existsSync(path.join(follower, ".claude/agents/planner.md")));
   assert.deepEqual(read(path.join(follower, ".contrejour/loop.json")), { schema_version: 1, loop: "iterate-and-check", params: { max_rounds: 3 } });
   assert.ok(read(path.join(follower, ".contrejour/reference.json")).files.includes(".claude/agents/owner-review.md"));
+  // A folder whose reference.json names another folder is no example, wherever it is.
+  const misnamed = path.join(sandbox, "misnamed");
+  fs.mkdirSync(misnamed);
+  fs.writeFileSync(path.join(misnamed, "reference.json"), JSON.stringify({ name: "maker", task_loop: "iterate-and-check" }));
+  assert.throws(() => applyExample(follower, misnamed, "community"), /is not an example project/);
   // Published again after a change: only what changed, and what the project no longer has is removed.
   assert.equal(plan(maker).digest, null, "the community already has exactly this project");
   fs.appendFileSync(path.join(maker, ".claude/agents/planner.md"), "\nLearned later.\n");

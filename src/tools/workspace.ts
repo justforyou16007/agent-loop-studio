@@ -52,21 +52,26 @@ function exampleDirs(library: string | null): { dir: string; source: ReferenceIn
   ].filter((entry) => fs.existsSync(entry.dir));
 }
 
+/** The example in `dir`, when its reference.json names it after its folder and names a task loop. */
+function readReference(dir: string, source: ReferenceInfo["source"]): ReferenceInfo | null {
+  try {
+    const info: unknown = JSON.parse(fs.readFileSync(path.join(dir, "reference.json"), "utf8"));
+    if (isRecord(info) && info.name === path.basename(dir) && typeof info.task_loop === "string")
+      return { ...(info as unknown as ReferenceInfo), source };
+  } catch {
+    // A folder without a readable reference.json is not an example.
+  }
+  return null;
+}
+
 /** The examples a new project can start from: `<dir>/<name>/reference.json`, the framework's first. */
 export function listReferences(library: string | null): ReferenceInfo[] {
   const out: ReferenceInfo[] = [];
   for (const { dir, source } of exampleDirs(library))
     for (const name of fs.readdirSync(dir).sort()) {
       if (out.some((known) => known.name === name)) continue;
-      try {
-        const info: unknown = JSON.parse(
-          fs.readFileSync(path.join(dir, name, "reference.json"), "utf8"),
-        );
-        if (isRecord(info) && info.name === name && typeof info.task_loop === "string")
-          out.push({ ...(info as unknown as ReferenceInfo), source });
-      } catch {
-        // A folder without a readable reference.json is not an example.
-      }
+      const info = readReference(path.join(dir, name), source);
+      if (info) out.push(info);
     }
   return out;
 }
@@ -128,32 +133,49 @@ function seed(root: string, target: string, contents: Buffer): void {
   }
 }
 
-/**
- * Give a project the loops and roles of an example, and make its task loop, with
- * its values, the project's. The example's take the place of a framework loop or
- * role of the same name the project still has as installed; what the project
- * got from it is recorded, since it is the project's own to publish.
- */
+/** Start a project from the example of this name its library checkout has, the framework's first. */
 export function applyReference(
   projectRoot: string,
   name: string,
 ): { added: string[]; loop: string } {
   const root = path.resolve(projectRoot);
-  const library = installedLibrary(root);
-  const reference = listReferences(library).find((entry) => entry.name === name);
-  if (!reference) failA1("NOT_FOUND", `there is no example project ${name}`);
-  const dir = exampleDirs(library)
-    .map((entry) => path.join(entry.dir, name))
-    .find((candidate) => fs.existsSync(path.join(candidate, "reference.json")))!;
+  const found = exampleDirs(installedLibrary(root))
+    .map((entry) => ({ dir: path.join(entry.dir, name), source: entry.source }))
+    .find((candidate) => readReference(candidate.dir, candidate.source));
+  if (!found) failA1("NOT_FOUND", `there is no example project ${name}`);
+  return applyExample(root, found.dir, found.source);
+}
+
+/**
+ * Give a project the loops and roles of the example in `dir`, and make its task
+ * loop, with its values, the project's. The example's take the place of a
+ * framework loop or role of the same name the project still has as installed;
+ * what the project got from it is recorded, since it is the project's own to
+ * publish. The community library checks each published project this way.
+ */
+export function applyExample(
+  projectRoot: string,
+  exampleDir: string,
+  source: ReferenceInfo["source"],
+): { added: string[]; loop: string } {
+  const root = path.resolve(projectRoot);
+  const dir = path.resolve(exampleDir);
+  const reference = readReference(dir, source);
+  if (!reference)
+    failA1(
+      "NOT_FOUND",
+      `${dir} is not an example project: it needs a reference.json naming it after its folder and naming a task loop`,
+    );
+  const { name } = reference;
   const added: string[] = [];
   for (const [from, to, extension] of [
     ["loops", "loops", ".md"],
     ["loops", "workflows", ".js"],
     ["roles", "agents", ".md"],
   ] as const) {
-    const source = path.join(dir, from);
-    if (!fs.existsSync(source)) continue;
-    for (const file of fs.readdirSync(source).filter((entry) => entry.endsWith(extension))) {
+    const units = path.join(dir, from);
+    if (!fs.existsSync(units)) continue;
+    for (const file of fs.readdirSync(units).filter((entry) => entry.endsWith(extension))) {
       const target = path.join(root, ".claude", to, file);
       const relative = path.relative(path.join(root, ".claude"), target);
       const baseline = path.join(root, ".contrejour", "seeded", relative);
@@ -163,7 +185,7 @@ export function applyReference(
         !(fs.existsSync(baseline) && fs.readFileSync(baseline).equals(fs.readFileSync(target)))
       )
         continue;
-      seed(root, target, fs.readFileSync(path.join(source, file)));
+      seed(root, target, fs.readFileSync(path.join(units, file)));
       added.push(path.relative(root, target).split(path.sep).join("/"));
     }
   }
