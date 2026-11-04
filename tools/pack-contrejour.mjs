@@ -16,7 +16,7 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), "contrejour-package-"));
 const stage = path.join(temp, "contrejour");
 const skills = ["shared-references"];
 // The framework's helpers; a project package adds its own next to them.
-const entries = ["tools/project-cli", "tools/hook", "tools/loop-check", "tools/library-cli", "tools/loop-view", "tools/studio"];
+const entries = ["tools/project-cli", "tools/hook", "tools/loop-check", "tools/publish-cli", "tools/loop-view", "tools/studio"];
 const visited = new Set();
 
 function copy(relative) {

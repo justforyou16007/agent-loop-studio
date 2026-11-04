@@ -2,51 +2,32 @@
 
 Agent loops on Claude Code. A **loop** schedules **roles**: which role does each step, in what order, on what condition, how many times, and where it stops for the owner. A **role** is a Claude Code agent file that does one step. A **session** only starts loops and carries the owner's answers into them. No flow lives outside a loop, no role runs another role, and every decision of the owner's is an `owner-review` step of a loop.
 
-The framework builds, reuses and improves loops and roles:
+The Studio is where loops are made and run; the community library is where they are published:
 
-- **The Studio**, the owner's console in a browser on the same machine. Say what you want in its chat: it lists the close loops at once, each previewable as a flow, and draws the closest on a canvas, its parameters beside the steps they affect. Point at steps or arrows and say what to change; `loop-authoring` drafts it in a background Claude Code session and stops for your review, with the draft on the canvas. Choose the loop a project runs and its parameter values, run any loop and watch its steps, change roles in the chat, and keep a workspace of projects: start one from a reference project, copy one.
-- **Base roles and loops**: `setup` (with `project-setup`), which every project has and the Studio opens a new project with: it sets up the project's workflow, the task loop that does what the owner wants and its parameter values, found among the loops that fit and changed or built when the owner asks, then checks the loops and hands off. `loop-trial` (with `loop-tester`) checks a loop the way it will run: the static check, then a real run on a small scale, the owner's judgement of whether it serves their goal, and an improvement before the next trial. `loop-authoring` and `role-authoring` (with `loop-query`, `loop-editor`, `role-creator`), `owner-review`, `trajectory-optimizer`, which fixes the project's roles from what their trajectories show, `project-memory`, which keeps what worked and what did not, and `task-manager`, the session's role. What a project improves stays in the project; `library-contribution` (with `library-contributor`, and `contribution-check` when the project checks what leaves) contributes the loops and roles the owner chooses to the community library, only when they decide to and after they reviewed exactly what leaves.
+- **Editing: the Studio.** An application you install once on a machine, the owner's console in a browser. It keeps a workspace of projects: start one empty, from one of the framework's examples or from a project published to the community, copy one, open one. Say what you want in its chat: it lists the close loops at once, each previewable as a flow, and draws the closest on a canvas, its parameters beside the steps they affect. Point at steps or arrows and say what to change; `loop-authoring` drafts it in a background Claude Code session and stops for your review. Set up the project's workflow (`setup`), try a loop for real on a small scale (Trial, `loop-trial`), run it and watch its steps, change roles in the chat. What the project improves, its roles fixed from what their trajectories show above all, stays in the project.
+- **Publishing: the community library.** When you decide to, Publish puts the whole project in [agent-loop-community](https://github.com/justforyou16007/agent-loop-community) as an example any project can start from: what it is, the task loop it runs with which values, and every loop and role that is its own. You review exactly what leaves first; it is one pull request that the community's maintainers review. Another machine's Studio then starts a project from it.
+- **Base roles and loops**: `setup` (with `project-setup`) sets up a project's workflow: the task loop that does what the owner wants and its parameter values, found among the loops that fit and changed or built when the owner asks, then a check and the hand-off. `loop-trial` (with `loop-tester`) checks a loop the way it will run: the static check, a real run on a small scale, the owner's judgement of whether it serves their goal, an improvement before the next trial. `publish` (with `project-publisher`, and `publish-check` when the project checks what leaves) publishes the project. `loop-authoring` and `role-authoring` (with `loop-query`, `loop-editor`, `role-creator`), `owner-review`, `trajectory-optimizer`, `project-memory`, which keeps what worked and what did not, and `task-manager`, the session's role.
 - **Checks**: `loop-check` runs a loop's script against stub roles without calling a model, so every branch is reached; roles are checked for the sections the optimizer relies on.
 - **Hooks** that only record or block: every finished role leaves its trajectory; an answer passed to a loop must be a message the owner typed after the loop asked.
 
-The loops and roles that projects share live in [agent-loop-community](https://github.com/justforyou16007/agent-loop-community). A project package uses both as git submodules, at the versions it chooses; nothing points back from them to a project. [auto-dl-loop](https://github.com/justforyou16007/auto-dl-loop), a two-machine research task, is one.
+## Install the Studio
 
-## Install a project
-
-From a local checkout (Node.js 22.12+):
+Once per machine, from a local checkout (Node.js 22.12+, and Claude Code):
 
 ```bash
 git clone https://github.com/justforyou16007/agent-loop-studio.git
 cd agent-loop-studio
 npm ci && npm run build
-bash distribution/install-contrejour.sh --role default --project /path/to/project
+npm start
 ```
 
-The installer writes only into the project (`.contrejour/`, `.claude/`), never global configuration, and downloads nothing. Then open the Studio:
+It prints a one-time sign-in link: open it in your browser. The Studio answers only on this machine's own address; from another machine, forward the port (`ssh -L 8790:127.0.0.1:8790 <machine>`). It keeps its projects in `~/agent-loop-projects` (`--workspace <dir>`, or `AGENT_LOOP_WORKSPACE`, for another folder).
 
-```bash
-node /path/to/project/.contrejour/dist/tools/studio.js --project /path/to/project
-```
-
-It prints a one-time sign-in link: open it in your browser. The Studio answers only on this machine's own address; from another machine, forward the port (`ssh -L 8790:127.0.0.1:8790 <machine>`). Open `claude` in the project once and accept the folder trust prompt: background sessions start only in a trusted folder. A project that is not set up yet opens with its `setup` loop on the canvas: press Run, and answer in the chat whenever it asks. Trial, beside Run, tries the loop on the canvas with `loop-trial`.
-
-To keep several projects, start the Studio on a folder of them, with this checkout as the library new projects come from:
-
-```bash
-node dist/tools/studio.js --workspace ~/projects --library "$PWD"
-```
-
-To reuse what other projects shared, clone the community library into this checkout once (git ignores it here):
-
-```bash
-git clone https://github.com/justforyou16007/agent-loop-community.git agent-loop-community
-```
-
-Projects installed from this checkout then find its loops and roles in the Studio, and `library-contribution` contributes there what their owners choose. Without it, the contribution loop offers to fetch it first.
+On its Projects page, fetch the community library once (it is cloned beside the checkout, where git ignores it), and start a project: empty, from a framework example or from a community project. The Studio creates the project's folder with what Claude Code needs to run it; you install nothing into it yourself. Open `claude` in the new project's folder once and accept the folder trust prompt: background sessions start only in a trusted folder. A project that is not set up yet opens with its `setup` loop on the canvas: press Run, and answer in the chat whenever it asks. Trial, beside Run, tries the loop on the canvas; Publish, at the top, publishes the project.
 
 ## A project package
 
-A package that builds on the framework says what it is in `project.json`: its profiles (each with the role sessions enter as and the library sides its loops and roles come from), the hook actions it adds, and the module of its own helpers the framework calls where the project decides (what counts as a finished task, what must never leave in a contribution, the check a contribution must pass). Its own rules for the framework's roles go in `skills/shared-references/project-rules.md`. See [docs/architecture.md](docs/architecture.md).
+Projects made in the Studio need nothing of their own. A package that builds on the framework for a particular kind of project (machines that work together, helpers of its own, a special check of what leaves) says what it is in `project.json`: its profiles (each with the role sessions enter as and the library sides its loops and roles come from), the hook actions it adds, and the module of its own helpers the framework calls where the project decides (what counts as a finished task, what must never leave when it is published, the check a publication must pass). Its own rules for the framework's roles go in `skills/shared-references/project-rules.md`. See [docs/architecture.md](docs/architecture.md).
 
 ## Develop
 

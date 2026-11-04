@@ -12,7 +12,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const library = path.join(root, "library");
-const checker = path.join(root, "dist", "tools", "library-cli.js");
+const checker = path.join(root, "dist", "tools", "publish-cli.js");
 const stamp = process.argv.includes("--stamp");
 const DIGEST = /^\/\/ contrejour-loop-definition-sha256: [0-9a-f]{64}[ \t]*$/gm;
 
@@ -48,7 +48,7 @@ if (stamp)
     }
   }
 
-if (!fs.existsSync(checker)) throw new Error("Run npm run build first: dist/tools/library-cli.js is missing.");
+if (!fs.existsSync(checker)) throw new Error("Run npm run build first: dist/tools/publish-cli.js is missing.");
 const { checkLibrary } = await import(pathToFileURL(checker).href);
 const { ok, reports } = await checkLibrary(library, manifest);
 console.log(JSON.stringify(reports, null, 2));

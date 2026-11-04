@@ -69,6 +69,7 @@ export const api = {
     post<{ id: string; session: string }>("/api/authoring", request),
   projects: () => get<ProjectsInfo>("/api/projects"),
   openProject: (name: string) => post<{ current: string }>("/api/projects/open", { name }),
+  fetchCommunity: () => post<{ present: boolean }>("/api/projects/community", {}),
   newProject: (name: string, reference: string | null) =>
     post<{ current: string }>("/api/projects/new", { name, reference }),
   copyProject: (from: string, name: string) =>

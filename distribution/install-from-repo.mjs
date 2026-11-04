@@ -40,7 +40,7 @@ for (const relative of [
   "dist/tools/hook.js",
   "dist/tools/project-cli.js",
   "dist/tools/loop-check.js",
-  "dist/tools/library-cli.js",
+  "dist/tools/publish-cli.js",
   "dist/tools/studio.js",
   "dist/studio/index.html",
 ]) {

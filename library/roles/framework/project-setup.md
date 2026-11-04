@@ -59,7 +59,7 @@ Write the report for the owner, in the language they write in:
 3. The checks: passed, or each defect left with what to do about it.
 4. How to try the workflow before the real work: the `loop-trial` loop runs the task loop for real on a small scale and asks the owner whether what it did serves the goal, improving it between trials (`Run the loop-trial loop with args {"loop": "<loop>", "goal": "<the goal>"}`, or Trial in the Studio).
 5. How to start the work, as this project's rules say; without rules: run the task loop from the Studio, or open a session in the project with `claude --permission-mode bypassPermissions "start"`, since the loop runs unattended and must not wait for approvals (`auto` instead has a classifier review each step, which may refuse some).
-6. What the owner may do later, each when they decide to: change the project's loops and roles in the Studio, or run `setup` again; share the project's loops and roles with other projects through the community library (`library-contribution`).
+6. What the owner may do later, each when they decide to: change the project's loops and roles in the Studio, or run `setup` again; publish the whole project to the community library as an example others can start from (`publish`, or Publish in the Studio).
 
 Then record that the project is set up, and return the report:
 

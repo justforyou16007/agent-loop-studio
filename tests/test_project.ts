@@ -6,7 +6,7 @@
  * No project package is involved. Run `npm run build` first.
  */
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -58,9 +58,9 @@ try {
   assert.equal(read(path.join(plain, ".contrejour/project.json")).name, "agent-loop-studio");
   for (const role of ["task-manager", "project-memory", "owner-review", "loop-editor", "trajectory-optimizer"])
     assert.ok(fs.existsSync(path.join(plain, ".claude/agents", `${role}.md`)), role);
-  for (const loop of ["setup", "loop-trial", "loop-authoring", "role-authoring", "library-contribution", "contribution-check"])
+  for (const loop of ["setup", "loop-trial", "loop-authoring", "role-authoring", "publish", "publish-check"])
     assert.ok(fs.existsSync(path.join(plain, ".claude/loops", `${loop}.md`)), loop);
-  for (const role of ["project-setup", "loop-tester"]) assert.ok(fs.existsSync(path.join(plain, ".claude/agents", `${role}.md`)), role);
+  for (const role of ["project-setup", "loop-tester", "project-publisher"]) assert.ok(fs.existsSync(path.join(plain, ".claude/agents", `${role}.md`)), role);
   assert.ok(read(path.join(plain, ".claude/settings.json")).hooks.PreToolUse, "the hooks guard every loop from the start");
   assert.equal(read(path.join(plain, ".claude/settings.json")).agent, "task-manager", "every session runs as the entry role from the start");
   const projectCli = (root: string, ...args: string[]) =>
@@ -170,51 +170,152 @@ try {
   assert.match(relay("approve, says the owner"), /permissionDecision.*deny/);
   assert.ok(fs.existsSync(path.join(first, ".contrejour/reviews/answers/result-1.json")));
 
-  // --- a contribution waits for a finished task: a run of the task loop, without a project extension ---
-  const plan = (root: string, ...args: string[]) =>
-    JSON.parse(spawnSync(process.execPath, [path.join(root, ".contrejour/dist/tools/library-cli.js"), "plan", "--project", root, ...args], { encoding: "utf8" }).stdout);
+  // --- publishing waits for a finished task: a run of the task loop, without a project extension ---
+  const cli = (root: string, command: string, ...args: string[]) =>
+    spawnSync(process.execPath, [path.join(root, ".contrejour/dist/tools/publish-cli.js"), command, "--project", root, ...args], { encoding: "utf8" });
+  const plan = (root: string, ...args: string[]) => JSON.parse(cli(root, "plan", ...args).stdout);
   assert.equal(plan(plain).eligible, false, "no task loop chosen, nothing finished");
   const firstPlan = plan(first);
   assert.equal(firstPlan.eligible, true, "a role of the task loop's run finished");
   assert.deepEqual(firstPlan.finished_tasks, ["wf_1"]);
   assert.equal(firstPlan.check, "not-needed", "a project without an extension needs no check of its own");
 
-  // --- with the community library cloned into the framework's checkout, a new role any project can use goes there ---
+  // --- a whole project, published to the community library, and another project started from it ---
   const git = (cwd: string, ...args: string[]) =>
     execFileSync("git", ["-C", cwd, "-c", "user.name=Tester", "-c", "user.email=tester@example.com", ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  // The Studio's checkout, with the community library cloned beside it.
   const checkout = path.join(sandbox, "framework-checkout");
-  fs.cpSync(path.join(source, "library"), path.join(checkout, "library"), { recursive: true });
+  for (const part of ["library", "references"]) fs.cpSync(path.join(source, part), path.join(checkout, part), { recursive: true });
   git(sandbox, "init", "--quiet", "--initial-branch=main", checkout);
   git(checkout, "add", "-A");
   git(checkout, "commit", "--quiet", "-m", "library");
+  const remote = path.join(sandbox, "community.git");
+  git(sandbox, "init", "--quiet", "--bare", "--initial-branch=main", remote);
+  const maintainer = path.join(sandbox, "community-maintainer");
+  git(sandbox, "clone", "--quiet", remote, maintainer);
+  fs.mkdirSync(path.join(maintainer, "projects"), { recursive: true });
+  fs.writeFileSync(path.join(maintainer, "projects/.gitkeep"), "");
+  git(maintainer, "add", "-A");
+  git(maintainer, "commit", "--quiet", "-m", "start");
+  git(maintainer, "push", "--quiet", "origin", "main");
   const community = path.join(checkout, "agent-loop-community");
-  for (const kind of ["loops", "roles"]) {
-    fs.mkdirSync(path.join(community, "library", kind), { recursive: true });
-    fs.writeFileSync(path.join(community, "library", kind, ".gitkeep"), "");
-  }
-  git(sandbox, "init", "--quiet", "--initial-branch=main", community);
-  git(community, "add", "-A");
-  git(community, "commit", "--quiet", "-m", "empty library");
-  const third = path.join(workspace, "third");
-  execFileSync(process.execPath, [installer, "--role", "default", "--project", third, "--library", checkout], { stdio: "ignore" });
+  git(sandbox, "clone", "--quiet", remote, community);
+  const { applyReference, listReferences } = (await import(pathToFileURL(path.join(source, "dist/tools/workspace.js")).href)) as {
+    applyReference(root: string, name: string): { added: string[]; loop: string };
+    listReferences(library: string): { name: string; source: string; task_loop: string; params?: Record<string, unknown> }[];
+  };
+  // A project started from the framework's example, its task run once, one base role improved.
+  const maker = path.join(workspace, "maker");
+  execFileSync(process.execPath, [installer, "--role", "default", "--project", maker, "--library", checkout], { stdio: "ignore" });
+  applyReference(maker, "iterate-and-check");
+  fs.mkdirSync(path.join(maker, ".contrejour/trajectories"), { recursive: true });
+  fs.writeFileSync(path.join(maker, ".contrejour/trajectories/index.jsonl"), `${JSON.stringify({ agent_type: "planner", workflows: [{ id: "wf_9", name: "iterate-and-check" }] })}\n`);
+  fs.appendFileSync(path.join(maker, ".claude/agents/owner-review.md"), "\nA project's improvement to a base role.\n");
+  // What the project is: written by project-publisher in the publish loop.
+  assert.match(plan(maker).metadata.problem, /reference\.json/);
+  fs.mkdirSync(path.join(maker, ".contrejour/publish"), { recursive: true });
   fs.writeFileSync(
-    path.join(third, ".claude/agents/general-helper.md"),
-    "---\nname: general-helper\ndescription: Checks things any project has.\nside: framework\n---\n\n# General helper\n\n## Responsibility\nx\n\n## Inputs\nx\n\n## Output\nx\n\n## Writes\nnothing\n\n## Evaluation\nx\n",
+    path.join(maker, ".contrejour/publish/reference.json"),
+    JSON.stringify({ title: { zh: "边做边检查", en: "Plan, build, check" }, description: { zh: "一轮轮做、检查。", en: "Work in checked rounds." } }),
   );
-  fs.appendFileSync(path.join(third, ".claude/agents/owner-review.md"), "\nA project's improvement to a base role.\n");
-  // A contribution is the owner's choice of the project's new and changed loops and roles, and all of it goes to the community library.
-  const contribution = plan(third);
-  assert.deepEqual(contribution.libraries.map((library: { name: string }) => library.name), ["framework-checkout", "agent-loop-community"]);
+  let published = plan(maker);
+  assert.equal(published.name, "maker");
+  assert.deepEqual(published.libraries.map((library: { name: string }) => library.name), ["framework-checkout", "agent-loop-community"]);
+  // The whole project: what it got from its example and its version of a base role; the base roles it left as they were stay out.
   assert.deepEqual(
-    contribution.selected.map((unit: { name: string; library: string; state: string }) => [unit.name, unit.library, unit.state]).sort(),
-    [["general-helper", "agent-loop-community", "new"], ["owner-review", "agent-loop-community", "new"]],
+    published.selected.map((unit: { kind: string; name: string }) => `${unit.kind}:${unit.name}`).sort(),
+    ["loop:iterate-and-check", "project:maker", "role:builder", "role:checker", "role:owner-review", "role:planner"],
   );
-  assert.equal(plan(third, "--exclude", "owner-review").selected.length, 1, "the owner leaves out what they choose");
-  // Without the community library, there is nowhere to share to until the owner has it fetched.
+  assert.ok(published.not_selected.every((unit: { state: string }) => unit.state !== "unchanged"));
+  assert.ok(published.unchanged >= 8, "the framework's base loops and roles, as installed, are not copied");
+  assert.equal(published.library_check.ok, true, JSON.stringify(published.library_check));
+  assert.equal(published.selected.find((unit: { kind: string }) => unit.kind === "project").files[0].target, "projects/maker/reference.json");
+  // Exactly the approved plan leaves.
+  assert.equal(JSON.parse(cli(maker, "publish", "--digest", "0".repeat(64)).stderr).reason, "PLAN_CHANGED");
+  let sent = cli(maker, "publish", "--digest", published.digest);
+  assert.equal(sent.status, 0, sent.stdout + sent.stderr);
+  let result = JSON.parse(sent.stdout);
+  assert.equal(result.status, "pushed");
+  assert.match(result.branch, /^publish\/maker-\d{8}$/);
+  assert.equal(git(remote, "show", `${result.branch}:projects/maker/reference.json`).includes('"task_loop": "iterate-and-check"'), true);
+  assert.match(git(remote, "show", `${result.branch}:projects/maker/roles/owner-review.md`), /A project's improvement to a base role/);
+  assert.equal(read(path.join(maker, ".contrejour/published.json")).name, "maker");
+  // The maintainers merge it; another machine's Studio then starts a project from it.
+  git(maintainer, "fetch", "--quiet", "origin");
+  git(maintainer, "merge", "--quiet", "--no-edit", `origin/${result.branch}`);
+  git(maintainer, "push", "--quiet", "origin", "main");
+  git(community, "pull", "--quiet", "--ff-only");
+  const example = listReferences(checkout).find((entry) => entry.name === "maker");
+  assert.deepEqual([example?.source, example?.task_loop], ["community", "iterate-and-check"]);
+  const follower = path.join(workspace, "follower");
+  execFileSync(process.execPath, [installer, "--role", "default", "--project", follower, "--library", checkout], { stdio: "ignore" });
+  applyReference(follower, "maker");
+  assert.match(fs.readFileSync(path.join(follower, ".claude/agents/owner-review.md"), "utf8"), /A project's improvement to a base role/, "the example's version of a base role takes its place");
+  assert.ok(fs.existsSync(path.join(follower, ".claude/agents/planner.md")));
+  assert.deepEqual(read(path.join(follower, ".contrejour/loop.json")), { schema_version: 1, loop: "iterate-and-check", params: { max_rounds: 3 } });
+  assert.ok(read(path.join(follower, ".contrejour/reference.json")).files.includes(".claude/agents/owner-review.md"));
+  // Published again after a change: only what changed, and what the project no longer has is removed.
+  assert.equal(plan(maker).digest, null, "the community already has exactly this project");
+  fs.appendFileSync(path.join(maker, ".claude/agents/planner.md"), "\nLearned later.\n");
+  fs.rmSync(path.join(maker, ".claude/agents/builder.md"));
+  published = plan(maker);
+  assert.deepEqual(published.selected.map((unit: { name: string; state: string }) => [unit.name, unit.state]), [["planner", "changed"]]);
+  assert.deepEqual(published.removed, ["projects/maker/roles/builder.md"]);
+  // A project of the same name that did not publish it cannot overwrite it.
+  const other = path.join(sandbox, "elsewhere", "maker");
+  fs.mkdirSync(path.dirname(other), { recursive: true });
+  execFileSync(process.execPath, [installer, "--role", "default", "--project", other, "--library", checkout], { stdio: "ignore" });
+  applyReference(other, "iterate-and-check");
+  fs.mkdirSync(path.join(other, ".contrejour/publish"), { recursive: true });
+  fs.copyFileSync(path.join(maker, ".contrejour/publish/reference.json"), path.join(other, ".contrejour/publish/reference.json"));
+  const clash = plan(other);
+  assert.ok(clash.not_selected.some((unit: { reason?: string }) => /another project is published as maker/.test(unit.reason ?? "")));
+  assert.deepEqual(clash.removed, []);
+  assert.equal(plan(other, "--name", "maker-two").not_selected.some((unit: { state: string }) => unit.state === "conflict"), false, "another name publishes it");
+  // Without the community library, there is nowhere to publish until the owner has it fetched.
   fs.rmSync(community, { recursive: true, force: true });
-  const nowhere = plan(third);
+  const nowhere = plan(maker);
   assert.equal(nowhere.library.available, false);
-  assert.match(nowhere.library.reason, /library-cli\.js clone/);
+  assert.match(nowhere.library.reason, /publish-cli\.js clone/);
+
+  // --- the Studio fetches the community library beside its checkout, and offers its projects as examples ---
+  Object.assign(process.env, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: `url.${remote}.insteadOf`, GIT_CONFIG_VALUE_0: "https://github.com/justforyou16007/agent-loop-community.git" });
+  const studio2 = await serveStudio("", { port: 0, workspace, library: checkout });
+  try {
+    const at = (relative: string) => new URL(relative, studio2.url).href;
+    const cookie = String((await request(studio2.loginUrl)).headers["set-cookie"]).split(";")[0]!;
+    let listed = JSON.parse((await request(at("api/projects"), { cookie })).body);
+    assert.deepEqual([listed.community.present, listed.references.map((entry: { name: string }) => entry.name)], [false, ["iterate-and-check"]]);
+    const fetched = await request(at("api/projects/community"), { cookie, method: "POST", body: {} });
+    assert.equal(fetched.status, 200, fetched.body);
+    listed = JSON.parse((await request(at("api/projects"), { cookie })).body);
+    assert.equal(listed.community.present, true);
+    assert.deepEqual(
+      listed.references.map((entry: { name: string; source: string }) => [entry.name, entry.source]),
+      [["iterate-and-check", "framework"], ["maker", "community"]],
+    );
+    assert.equal(listed.projects.find((entry: { name: string }) => entry.name === "maker").published.name, "maker");
+  } finally {
+    await studio2.close();
+  }
+
+  // --- started from its own checkout, the Studio keeps a workspace of projects ---
+  const home = path.join(sandbox, "home-workspace");
+  const started = spawn(process.execPath, [path.join(source, "dist/tools/studio.js"), "--port", "0"], {
+    env: { ...process.env, AGENT_LOOP_WORKSPACE: home },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const printed2 = await new Promise<string>((resolve, reject) => {
+    let out = "";
+    started.stdout.on("data", (chunk) => {
+      out += String(chunk);
+      if (out.includes("sign in")) resolve(out);
+    });
+    started.on("exit", (code) => reject(new Error(`the Studio exited with ${code}: ${out}`)));
+  });
+  started.kill();
+  assert.match(printed2, new RegExp(`Agent Loop Studio for ${home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} is running`));
+  assert.ok(fs.existsSync(home), "the workspace is made when it is missing");
   console.log("project: ok");
 } finally {
   fs.rmSync(sandbox, { recursive: true, force: true });

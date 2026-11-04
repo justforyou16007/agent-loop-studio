@@ -8,16 +8,18 @@
  * keeps in memory and never writes to a file, so no agent on the machine can act
  * as the owner through it.
  */
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createCli, runCli } from "../lib/cli.js";
 import { flowOf, searchLoops, summarize } from "./flow.js";
 import { collectView, fingerprint, type ViewData } from "./loop-view.js";
 import type { SessionOptions } from "./sessions.js";
-import { installedLibrary } from "./installation.js";
+import { COMMUNITY_LIBRARY, COMMUNITY_URL, installedLibrary } from "./installation.js";
 import { useLoop } from "./project-loop.js";
 import { copyProject, createProject, listProjects, listReferences } from "./workspace.js";
 import {
@@ -294,7 +296,8 @@ export async function serveStudio(
     head: boolean,
     response: http.ServerResponse,
   ): Promise<void> {
-    const library = (root ? installedLibrary(root) : null) ?? options.library ?? null;
+    const library = options.library ?? (root ? installedLibrary(root) : null) ?? null;
+    const community = library ? path.join(library, COMMUNITY_LIBRARY) : null;
     if (request.method === "GET" || request.method === "HEAD")
       return json(
         response,
@@ -305,9 +308,31 @@ export async function serveStudio(
           projects: workspace ? listProjects(workspace) : [],
           references: listReferences(library),
           can_create: Boolean(workspace && library),
+          community: { present: Boolean(community && fs.existsSync(path.join(community, ".git"))) },
         },
         head,
       );
+    // The community library, beside the Studio's checkout: its published projects are the examples to start from.
+    if (url.pathname === "/api/projects/community") {
+      if (!library || !community)
+        return json(response, 400, {
+          error: "no library checkout to keep the community library beside",
+        });
+      const fetched = fs.existsSync(path.join(community, ".git"))
+        ? spawnSync("git", ["-C", community, "pull", "--ff-only", "--quiet"], {
+            encoding: "utf8",
+            windowsHide: true,
+          })
+        : spawnSync("git", ["clone", "--quiet", COMMUNITY_URL, community], {
+            encoding: "utf8",
+            windowsHide: true,
+          });
+      if (fetched.status !== 0)
+        return json(response, 502, {
+          error: `could not fetch the community library: ${(fetched.stderr || String(fetched.error ?? "")).trim()}`,
+        });
+      return json(response, 200, { present: true, references: listReferences(library) });
+    }
     const body = await readBody(request);
     const name = typeof body.name === "string" ? body.name : "";
     if (!workspace)
@@ -516,6 +541,25 @@ export async function serveStudio(
   };
 }
 
+/** The framework's checkout this Studio runs from, when it runs from one rather than from a project's copy. */
+function studioCheckout(): string | null {
+  const checkout = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  try {
+    const manifest: unknown = JSON.parse(
+      fs.readFileSync(path.join(checkout, "project.json"), "utf8"),
+    );
+    return isRecord(manifest) &&
+      fs.existsSync(path.join(checkout, "distribution", "install-from-repo.mjs"))
+      ? checkout
+      : null;
+  } catch {
+    return null;
+  }
+}
+/** Where the Studio keeps its projects unless told otherwise. */
+const defaultWorkspace = (): string =>
+  process.env.AGENT_LOOP_WORKSPACE || path.join(os.homedir(), "agent-loop-projects");
+
 function cli(): void {
   const program = createCli(
     "studio",
@@ -525,11 +569,11 @@ function cli(): void {
     .option("--project <dir>", "the project to open")
     .option(
       "--workspace <dir>",
-      "a folder of projects to switch between, start and copy (default: the project's folder)",
+      "the folder of projects to switch between, start and copy (default, from the Studio's checkout: ~/agent-loop-projects, or AGENT_LOOP_WORKSPACE)",
     )
     .option(
       "--library <dir>",
-      "the library checkout new projects are installed from (default: the project's)",
+      "the checkout new projects are installed from (default: the Studio's own checkout)",
     )
     .option(
       "--host <host>",
@@ -563,11 +607,17 @@ function cli(): void {
             throw new Error(
               "--permission-mode must be bypassPermissions or auto: nobody is there to approve",
             );
-          if (!options.project && !options.workspace)
+          // Started from the Studio's own checkout, it keeps a workspace of projects and installs them from itself.
+          const checkout = studioCheckout();
+          const workspace =
+            options.workspace ??
+            (options.project ? undefined : checkout ? defaultWorkspace() : undefined);
+          if (!options.project && !workspace)
             throw new Error("open a --project, or a --workspace of projects");
+          if (workspace) fs.mkdirSync(path.resolve(workspace), { recursive: true });
           const studio = await serveStudio(options.project ?? "", {
-            workspace: options.workspace,
-            library: options.library ? path.resolve(options.library) : undefined,
+            workspace,
+            library: options.library ? path.resolve(options.library) : (checkout ?? undefined),
             host: options.host,
             port,
             session: {
@@ -578,7 +628,7 @@ function cli(): void {
           });
           console.log(
             [
-              `Contrejour Studio for ${options.project ? path.basename(path.resolve(options.project)) : path.resolve(options.workspace!)} is running (Ctrl+C stops it).`,
+              `Agent Loop Studio for ${options.project ? path.basename(path.resolve(options.project)) : path.resolve(workspace!)} is running (Ctrl+C stops it).`,
               `Open this link once to sign in; it works for one browser only and is not saved anywhere:`,
               `  ${studio.loginUrl}`,
             ].join("\n"),

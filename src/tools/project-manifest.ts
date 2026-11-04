@@ -125,7 +125,7 @@ export interface ProjectExtension {
   /**
    * Whether a contribution must pass a check of the project's (such as a review
    * against hidden data) before it leaves. The check's role records its verdict on
-   * the plan's digest with `library-cli.js record-check`.
+   * the plan's digest with `publish-cli.js record-check`.
    */
   needsContributionCheck?(root: string, profile: string): boolean;
 }

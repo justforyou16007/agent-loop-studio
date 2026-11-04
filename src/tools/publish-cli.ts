@@ -1,17 +1,15 @@
 #!/usr/bin/env node
 /**
- * The library-contributor role's tool. When the owner decides to contribute, the
- * loops and roles of this project the owner chooses, the ones it made and its own
- * versions of the ones it was given, go to the community library,
- * agent-loop-community, once at least one of the project's tasks has finished.
- * What a project improves stays in the project until its owner contributes it.
- *
- * The installer keeps a copy of every file it seeded in `.contrejour/seeded/`:
- * against that baseline, a file the project left alone is never sent, and one it
- * changed is merged three ways with what the community library holds of it, so a
- * contribution cannot undo anyone else's work. `plan` lists what would leave and
- * binds it to a digest, which `contribute` requires, so what leaves is what the
- * owner approved.
+ * The project-publisher role's tool. Editing happens in the Studio; publishing
+ * puts a whole project, as an example any project can start from, into the
+ * community library, agent-loop-community, under `projects/<name>/`: every loop
+ * and role of the project that the framework does not give every project as it
+ * is, and `reference.json`, which says what the project is and which task loop
+ * it runs with which values. Its data, keys, task and run records stay here. A
+ * project publishes once at least one of its tasks has finished, and only what
+ * its owner approved: `plan` lists exactly what would leave and binds it to a
+ * digest, which `publish` requires. Each publication is one pull request, which
+ * the community's maintainers review.
  */
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -25,7 +23,10 @@ import {
   installationFile,
   installedLibrary,
   installedRole,
+  libraryRoots,
   sidesOf,
+  COMMUNITY_LIBRARY,
+  COMMUNITY_URL,
   type Role,
 } from "./installation.js";
 import { checkLoop, checkRoles, type LoopReport, type RoleReport } from "./loop-check.js";
@@ -50,31 +51,29 @@ import { scanForThreats } from "./threat-scan.js";
 import { A1Error, failA1, isRecord } from "./validate.js";
 
 type State =
-  /** Sent: the library does not have it. */
+  /** Sent: the community's copy of the project does not have it yet. */
   | "new"
-  /** Sent: the project changed it and the library did not. */
+  /** Sent: this project changed it since it last published it. */
   | "changed"
-  /** Sent: both changed it, in different places, and the two merge cleanly. */
-  | "merged"
-  /** Not sent: both changed it in a way that needs a person, or the library holds another file of this name. */
+  /** Not sent: the community's copy was changed by someone else since this project published it, or another project is published under this name. */
   | "conflict"
-  /** Not sent: the project left it as seeded, whatever the library did since. */
+  /** Not sent: the framework gives every project this base loop or role, and this project left it as it was installed. */
   | "unchanged"
-  /** Not sent: the library already has exactly this. */
+  /** Not sent: the community's copy already has exactly this. */
   | "in-library"
-  /** Not sent: an earlier contribution already carries exactly this. */
-  | "already-contributed"
+  /** Not sent: an earlier publication of this project already carries exactly this. */
+  | "already-sent"
   /** Not sent: seeded by a release that kept no baseline, so what the project changed is unknown. */
   | "unknown-base"
-  /** Not sent: not in the form of a Contrejour role or loop, or its check fails. */
+  /** Not sent: not in the form of a role or loop, or its check fails. */
   | "invalid"
-  /** Not sent: it serves the other side. */
+  /** Not sent: it serves a side this project does not receive. */
   | "wrong-side"
   /** Not sent: it holds a key, a token, a hidden path or an injection pattern. */
   | "blocked"
   /** Not sent: the owner left it out. */
   | "excluded";
-const SENDABLE: readonly State[] = ["new", "changed", "merged"];
+const SENDABLE: readonly State[] = ["new", "changed"];
 
 interface PlanFile {
   source: string;
@@ -84,7 +83,7 @@ interface PlanFile {
   preview?: string;
 }
 interface PlanUnit {
-  kind: "role" | "loop";
+  kind: "role" | "loop" | "project";
   name: string;
   side: string | null;
   /** The library it goes to, by name, once it has a side. */
@@ -108,12 +107,18 @@ type LibraryView = ResolvedView | { available: false; reason: string; upstream: 
 interface PublicPlan {
   project: string;
   side: Role;
+  /** The name the project is published under: `projects/<name>/` in the community library. */
+  name: string;
+  /** What reference.json would say, or why it cannot be written yet. */
+  metadata: { file: string; problem: string | null };
+  /** Files of the community's copy of this project that the project no longer has; publishing removes them. */
+  removed: string[];
   /** At least one task finished, as the project counts them (a run of its task loop, unless it says otherwise). */
   eligible: boolean;
   finished_tasks: string[];
-  /** The library a contribution goes to: the community's. */
+  /** Where it is published: the community library. */
   library: LibraryView;
-  /** Every library a unit can go to: that checkout's, then the framework's and the community's it carries. */
+  /** The libraries this project knows: the checkout it was installed from, and the community's. */
   libraries: ResolvedView[];
   selected: PlanUnit[];
   not_selected: PlanUnit[];
@@ -179,11 +184,8 @@ const readJson = (file: string): unknown => {
 const seededFile = (root: string, source: string): string =>
   path.join(root, ".contrejour", "seeded", ...source.split("/").slice(1));
 const clonePath = (root: string): string => path.join(contributionsDir(root), "library-checkout");
-/** The framework's library and the community's, as a project package carries them. */
+/** The framework's library, as a project package carries it. */
 const FRAMEWORK_LIBRARY = "agent-loop-studio";
-const COMMUNITY_LIBRARY = "agent-loop-community";
-/** Where the community library is, for a project whose checkout does not carry it. */
-const COMMUNITY_URL = "https://github.com/justforyou16007/agent-loop-community.git";
 const communityClonePath = (root: string): string =>
   path.join(contributionsDir(root), "community-checkout");
 const logPath = (root: string): string => path.join(contributionsDir(root), "log.json");
@@ -248,11 +250,12 @@ function checkoutsOf(root: string): { name: string; checkout: string }[] {
       name: (remote && githubRepo(remote)?.name) || path.basename(main),
       checkout: main,
     });
-    for (const name of [FRAMEWORK_LIBRARY, COMMUNITY_LIBRARY]) {
-      const checkout = path.join(main, name);
-      if (fs.existsSync(path.join(checkout, "library")) && isOwnRepository(checkout))
-        found.push({ name, checkout });
-    }
+    // The framework's library a package carries, and the community library beside the checkout.
+    const framework = path.join(main, FRAMEWORK_LIBRARY);
+    if (fs.existsSync(path.join(framework, "library")) && isOwnRepository(framework))
+      found.push({ name: FRAMEWORK_LIBRARY, checkout: framework });
+    const community = path.join(main, COMMUNITY_LIBRARY);
+    if (isOwnRepository(community)) found.push({ name: COMMUNITY_LIBRARY, checkout: community });
   }
   // A project whose checkout carries no community library may have fetched one to share with.
   if (
@@ -278,7 +281,9 @@ function resolveLibrary(name: string, checkout: string): LibrarySource {
         `could not fetch origin, so this is what the checkout last saw: ${fetched.stderr}`,
       );
   }
-  const hasLibrary = (ref: string) => git(checkout, "cat-file", "-e", `${ref}:library/roles`).ok;
+  // The community library keeps its published projects; another library, its loops and roles.
+  const marker = name === COMMUNITY_LIBRARY ? "projects" : "library/roles";
+  const hasLibrary = (ref: string) => git(checkout, "cat-file", "-e", `${ref}:${marker}`).ok;
   const remoteDefault = (): string | null => {
     if (!remote) return null;
     const known = git(checkout, "symbolic-ref", "--short", "refs/remotes/origin/HEAD");
@@ -299,11 +304,11 @@ function resolveLibrary(name: string, checkout: string): LibrarySource {
   if (!base)
     failA1(
       "LIBRARY_UNAVAILABLE",
-      `no branch of ${checkout} holds library/roles: neither the default branch nor the branch it is on`,
+      `no branch of ${checkout} holds ${marker}: neither the default branch nor the branch it is on`,
     );
   if (defaultBranch && base.branch !== defaultBranch)
     notes.push(
-      `the default branch ${defaultBranch} has no library yet, so this contribution targets ${base.branch}`,
+      `the default branch ${defaultBranch} has no library yet, so this publication targets ${base.branch}`,
     );
   return {
     name,
@@ -330,43 +335,21 @@ function sentHashes(root: string): Map<string, Set<string>> {
 }
 
 /** How a file of the project relates to its baseline and to the library's current version. */
-function compare(
+/** How the community's published copy of a file relates to this project's text. */
+function stateAgainstPublished(
   ours: string,
-  base: string | null,
   theirs: string | null,
   sent: Set<string>,
-  seeded: boolean,
-): { state: State | "both-moved"; reason?: string } {
-  if (theirs !== null && ours === theirs) return { state: "in-library" };
-  // Seeded by a release that kept no baseline: what the project changed cannot be told.
-  if (base === null && seeded)
-    return {
-      state: "unknown-base",
-      reason:
-        "this project was installed before baselines were kept, so what it changed cannot be told: install into a fresh project to contribute it",
-    };
-  // The community library has no file of this name: it is new there, whatever the project started from.
+): { state: State; reason?: string } {
   if (theirs === null) return { state: "new" };
-  // The community holds what this project started from, or what it sent earlier: only this project moved since.
-  if (base === theirs || sent.has(sha256(theirs))) return { state: "changed" };
-  if (base !== null) return { state: "both-moved" };
+  if (theirs === ours) return { state: "in-library" };
+  // The community holds what this project published earlier: only this project moved since.
+  if (sent.has(sha256(theirs))) return { state: "changed" };
   return {
     state: "conflict",
-    reason: "the community library already has a different file of this name",
+    reason:
+      "the community's copy of it changed since this project published it: bring that change into this project's copy by hand, then plan again",
   };
-}
-
-/** The three-way merge of a role both sides changed, or null when it needs a person. */
-function merged(ours: string, base: string, theirs: string): string | null {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "contrejour-merge-"));
-  try {
-    const files = { ours, base, theirs };
-    for (const [name, text] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), text);
-    const result = run("git", ["merge-file", "-p", "ours", "base", "theirs"], dir);
-    return result.ok ? normal(result.stdout) : null;
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
 }
 
 const KEY_SHAPES: readonly [RegExp, string][] = [
@@ -427,9 +410,9 @@ function blockingProblems(
 }
 
 interface Classified extends PlanUnit {
-  /** The text that would leave, by library path. */
+  /** The text that would leave, by its path in the community library. */
   finals: Map<string, string>;
-  /** The library's current text, by library path, where it has one. */
+  /** The community's current text, by path, where it has one. */
   before: Map<string, string>;
 }
 
@@ -438,8 +421,15 @@ interface PlanContext {
   side: Role;
   /** The library sides this project receives, `framework` first. */
   sides: string[];
-  /** The libraries a unit can go to, the checkout the project was installed from first. */
-  libraries: LibrarySource[];
+  /** The name the project is published under. */
+  name: string;
+  community: LibrarySource;
+  /** The library checkouts holding the framework's base loops and roles. */
+  frameworkRoots: string[];
+  /** The files the project got from the example it started from, which are its own to publish. */
+  fromExample: Set<string>;
+  /** Whether another project is published under this name. */
+  taken: boolean;
   sent: Map<string, Set<string>>;
   seeded: Set<string>;
 }
@@ -448,45 +438,34 @@ function showAtBase(library: LibrarySource, target: string): string | null {
   const shown = git(library.checkout, "show", `${library.ref}:${target}`);
   return shown.ok ? normal(shown.stdout) : null;
 }
-/** The side folders a library has under `library/loops` or `library/roles`, as of its base. */
-function sidesAt(library: LibrarySource, directory: string): string[] {
-  const listed = git(
-    library.checkout,
-    "ls-tree",
-    "--name-only",
-    "-d",
-    `${library.ref}:library/${directory}`,
-  );
-  return listed.stdout.split("\n").filter(Boolean);
+/** The framework's own text of a base loop or role, when the framework has one of that name. */
+function frameworkText(context: PlanContext, kind: "loops" | "roles", file: string): string | null {
+  for (const library of context.frameworkRoots) {
+    const text = readText(path.join(library, "library", kind, "framework", file));
+    if (text !== null) return text;
+  }
+  return null;
 }
-
-/** The community library, where every contribution goes; a plan has one before it classifies anything. */
-const communityOf = (context: PlanContext): LibrarySource =>
-  context.libraries.find((library) => library.name === COMMUNITY_LIBRARY)!;
 
 /**
- * A side's project receives the loops and roles any project can use (`framework`)
- * and its side's; a name must stay unique across them, in every library. One any
- * project can use may share its name only with the framework's own of that name,
- * which the community's version takes the place of; one of a side may not share
- * its name with one any project can use.
+ * Whether a file the framework also has is the project's to publish: one the
+ * project changed, or got from the example it started from, is; one it left as
+ * the framework installed it is not, since every project gets that.
  */
-function nameTakenElsewhere(
+function leftAsInstalled(
   context: PlanContext,
-  destination: LibrarySource,
-  directory: string,
-  unitSide: string,
-  file: string,
-): string | undefined {
-  for (const library of context.libraries)
-    for (const side of sidesAt(library, directory)) {
-      if (library === destination && side === unitSide) continue;
-      if (unitSide === "framework" ? side === "framework" : side !== "framework") continue;
-      if (showAtBase(library, `library/${directory}/${side}/${file}`) !== null)
-        return context.libraries.length > 1 ? `${side} in ${library.name}` : side;
-    }
-  return undefined;
+  source: string,
+  ours: string,
+  base: string | null,
+  framework: string | null,
+): "yes" | "no" | "unknown" {
+  if (framework === null || context.fromExample.has(source)) return "no";
+  if (base !== null) return ours === base ? "yes" : "no";
+  if (ours === framework) return "yes";
+  return context.seeded.has(source) ? "unknown" : "no";
 }
+const UNKNOWN_BASE =
+  "this project was installed before baselines were kept, so what it changed cannot be told: install into a fresh project to publish it";
 
 function classifyRole(context: PlanContext, name: string): Classified {
   const { root, side } = context;
@@ -498,7 +477,7 @@ function classifyRole(context: PlanContext, name: string): Classified {
     kind: "role",
     name,
     side: fields.side ?? null,
-    library: null,
+    library: COMMUNITY_LIBRARY,
     description: fields.description ?? "",
     state: "unchanged",
     warnings: [],
@@ -506,13 +485,21 @@ function classifyRole(context: PlanContext, name: string): Classified {
     finals: new Map(),
     before: new Map(),
   };
-  if (base !== null && ours === base) return unit;
+  const left = leftAsInstalled(
+    context,
+    source,
+    ours,
+    base,
+    frameworkText(context, "roles", `${name}.md`),
+  );
+  if (left === "yes") return unit;
+  if (left === "unknown") return { ...unit, state: "unknown-base", reason: UNKNOWN_BASE };
   const defects = checkRoles(root, [name])[0]?.defects ?? [];
   if (defects.length)
     return {
       ...unit,
       state: "invalid",
-      reason: `not in the form of a Contrejour role, so it stays in this project: ${defects.join("; ")}`,
+      reason: `not in the form of a role, so it stays in this project: ${defects.join("; ")}`,
     };
   if (!context.sides.includes(fields.side ?? ""))
     return {
@@ -520,62 +507,40 @@ function classifyRole(context: PlanContext, name: string): Classified {
       state: "wrong-side",
       reason: `it serves the ${fields.side} side, and this ${side} project receives ${context.sides.join(" and ")}`,
     };
-  const target = `library/roles/${fields.side}/${name}.md`;
-  const library = communityOf(context);
-  const taken = nameTakenElsewhere(context, library, "roles", fields.side, `${name}.md`);
-  if (taken)
-    return {
-      ...unit,
-      library: library.name,
-      state: "conflict",
-      reason: `the library has a role of this name under ${taken}`,
-    };
-  const theirs = showAtBase(library, target);
+  const target = `projects/${context.name}/roles/${name}.md`;
+  const theirs = showAtBase(context.community, target);
   const sent = context.sent.get(target) ?? new Set<string>();
-  const verdict = compare(ours, base, theirs, sent, context.seeded.has(source));
-  let final = ours;
-  let state: State;
-  let reason = verdict.reason;
-  if (verdict.state === "both-moved") {
-    const result = merged(ours, base!, theirs!);
-    if (result === null) {
-      state = "conflict";
-      reason =
-        "this project and the library changed the same part of it: bring the library's change into this project's copy by hand, then plan again";
-    } else {
-      state = "merged";
-      final = result;
-    }
-  } else state = verdict.state;
-  if (SENDABLE.includes(state) && sent.has(sha256(final))) {
-    state = "already-contributed";
-    reason = "an earlier contribution from this project already carries exactly this";
+  let { state, reason } = context.taken
+    ? { state: "conflict" as State, reason: TAKEN(context.name) }
+    : stateAgainstPublished(ours, theirs, sent);
+  if (SENDABLE.includes(state) && sent.has(sha256(ours))) {
+    state = "already-sent";
+    reason = "an earlier publication of this project already carries exactly this";
   }
   return {
     ...unit,
-    library: library.name,
     state,
     ...(reason ? { reason } : {}),
-    files: [{ source, target, sha256: sha256(final) }],
-    finals: new Map([[target, final]]),
+    files: [{ source, target, sha256: sha256(ours) }],
+    finals: new Map([[target, ours]]),
     before: new Map(theirs === null ? [] : [[target, theirs]]),
   };
 }
+const TAKEN = (name: string) =>
+  `another project is published as ${name}: publish this one under another name`;
 
 async function classifyLoop(context: PlanContext, name: string): Promise<Classified> {
   const { root, side } = context;
   const definitionSource = `.claude/loops/${name}.md`;
   const scriptSource = `.claude/workflows/${name}.js`;
   const definition = readText(loopDefinitionPath(root, name)) ?? "";
-  const script = readText(loopScriptPath(root, name));
+  const script = readText(loopScriptPath(root, name)) ?? "";
   const fields = frontmatter(definition);
-  const baseDefinition = readText(seededFile(root, definitionSource));
-  const baseScript = readText(seededFile(root, scriptSource));
   const unit: Classified = {
     kind: "loop",
     name,
     side: fields.side ?? null,
-    library: null,
+    library: COMMUNITY_LIBRARY,
     description: fields.description ?? "",
     state: "unchanged",
     warnings: [],
@@ -583,8 +548,24 @@ async function classifyLoop(context: PlanContext, name: string): Promise<Classif
     finals: new Map(),
     before: new Map(),
   };
-  if (baseDefinition !== null && definition === baseDefinition && script === baseScript)
-    return unit;
+  const lefts = [
+    leftAsInstalled(
+      context,
+      definitionSource,
+      definition,
+      readText(seededFile(root, definitionSource)),
+      frameworkText(context, "loops", `${name}.md`),
+    ),
+    leftAsInstalled(
+      context,
+      scriptSource,
+      script,
+      readText(seededFile(root, scriptSource)),
+      frameworkText(context, "loops", `${name}.js`),
+    ),
+  ];
+  if (lefts.every((left) => left === "yes")) return unit;
+  if (lefts.includes("unknown")) return { ...unit, state: "unknown-base", reason: UNKNOWN_BASE };
   if (!context.sides.includes(fields.side ?? ""))
     return {
       ...unit,
@@ -601,32 +582,28 @@ async function classifyLoop(context: PlanContext, name: string): Promise<Classif
         ...report.defects,
       ].join("; ")}`,
     };
-  const library = communityOf(context);
   const pairs = [
-    { source: definitionSource, ours: definition, base: baseDefinition, ext: "md" },
-    { source: scriptSource, ours: script ?? "", base: baseScript, ext: "js" },
+    { source: definitionSource, ours: definition, ext: "md" },
+    { source: scriptSource, ours: script, ext: "js" },
   ].map((pair) => {
-    const target = `library/loops/${fields.side}/${name}.${pair.ext}`;
-    const theirs = showAtBase(library, target);
+    const target = `projects/${context.name}/loops/${name}.${pair.ext}`;
+    const theirs = showAtBase(context.community, target);
     const sent = context.sent.get(target) ?? new Set<string>();
-    const seeded = context.seeded.has(pair.source);
     return {
       ...pair,
       target,
       theirs,
       sent,
-      verdict: compare(pair.ours, pair.base, theirs, sent, seeded),
+      verdict: stateAgainstPublished(pair.ours, theirs, sent),
     };
   });
-  const files = pairs.map((pair) => ({
-    source: pair.source,
-    target: pair.target,
-    sha256: sha256(pair.ours),
-  }));
   const whole = {
     ...unit,
-    library: library.name,
-    files,
+    files: pairs.map((pair) => ({
+      source: pair.source,
+      target: pair.target,
+      sha256: sha256(pair.ours),
+    })),
     finals: new Map(pairs.map((pair) => [pair.target, pair.ours])),
     before: new Map(
       pairs.flatMap((pair) =>
@@ -634,27 +611,16 @@ async function classifyLoop(context: PlanContext, name: string): Promise<Classif
       ),
     ),
   };
+  if (context.taken) return { ...whole, state: "conflict", reason: TAKEN(context.name) };
   if (pairs.every((pair) => pair.verdict.state === "in-library"))
     return { ...whole, state: "in-library" };
-  if (pairs.some((pair) => pair.verdict.state === "both-moved"))
-    return {
-      ...whole,
-      state: "conflict",
-      reason:
-        "this project and the library both changed this loop: a script is generated from its definition, so have loop-editor merge the definition and regenerate the script",
-    };
-  const stuck = pairs.find((pair) => ["conflict", "unknown-base"].includes(pair.verdict.state));
-  if (stuck)
-    return {
-      ...whole,
-      state: stuck.verdict.state as State,
-      ...(stuck.verdict.reason ? { reason: stuck.verdict.reason } : {}),
-    };
+  const stuck = pairs.find((pair) => pair.verdict.state === "conflict");
+  if (stuck) return { ...whole, state: "conflict", reason: stuck.verdict.reason! };
   if (pairs.every((pair) => pair.sent.has(sha256(pair.ours))))
     return {
       ...whole,
-      state: "already-contributed",
-      reason: "an earlier contribution from this project already carries exactly this",
+      state: "already-sent",
+      reason: "an earlier publication of this project already carries exactly this",
     };
   return { ...whole, state: pairs[0]!.theirs === null ? "new" : "changed" };
 }
@@ -791,41 +757,38 @@ export async function checkLibrary(
 
 /** The defects, in the library this contribution would produce, of what it carries. */
 /**
- * The defects, in the libraries this contribution would produce, of what it
- * carries: checked as a project receives them, the framework's and the
- * community's library laid under the package's, with the planned text in place.
+ * The defects of what the publication carries, checked as a project started from
+ * it gets it: the framework's library, with the published loops and roles laid
+ * over it by the sides they declare.
  */
-async function checkResult(
+async function checkPublication(
   root: string,
-  libraries: LibrarySource[],
+  context: PlanContext,
   selected: Classified[],
 ): Promise<{ ok: boolean; defects: string[] }> {
-  const merged = fs.mkdtempSync(path.join(os.tmpdir(), "contrejour-contribution-check-"));
+  const merged = fs.mkdtempSync(path.join(os.tmpdir(), "agent-loop-publish-check-"));
   try {
-    // Underneath, what the libraries gave this project, as it got them: a library this project
-    // has no checkout of (its package's, when it was installed from an archive) still counts.
-    layBaselines(root, path.join(merged, "library"));
-    // As a project gets them: the framework's library, the community's over it, the package's over both.
-    // A checkout that holds the framework's own folder (the framework's checkout itself) is the framework's.
-    const main = libraries[0]!;
-    const community = libraries.filter((library) => library.name === COMMUNITY_LIBRARY);
-    const framework = libraries.filter(
-      (library) => library !== main && !community.includes(library),
-    );
-    const mainIsFramework =
-      sidesAt(main, "loops").includes("framework") || sidesAt(main, "roles").includes("framework");
-    const order = mainIsFramework
-      ? [main, ...framework, ...community]
-      : [...framework, ...community, ...(community.includes(main) ? [] : [main])];
-    for (const library of order)
-      await inWorktree(root, library, ["--detach"], (dir) => {
-        if (fs.existsSync(path.join(dir, "library")))
-          fs.cpSync(path.join(dir, "library"), path.join(merged, "library"), {
-            recursive: true,
-            filter: (file) => path.basename(file) !== ".gitkeep",
-          });
-      });
-    writeFinals(merged, selected);
+    // The first root's version is the one a project gets, so it is laid last.
+    for (const library of [...context.frameworkRoots].reverse())
+      if (fs.existsSync(path.join(library, "library")))
+        fs.cpSync(path.join(library, "library"), path.join(merged, "library"), {
+          recursive: true,
+          filter: (file) => path.basename(file) !== ".gitkeep",
+        });
+    for (const unit of selected) {
+      if (unit.kind === "project" || !unit.side) continue;
+      for (const [target, text] of unit.finals) {
+        const file = path.join(
+          merged,
+          "library",
+          unit.kind === "loop" ? "loops" : "roles",
+          unit.side,
+          target.split("/").pop()!,
+        );
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, text);
+      }
+    }
     const { reports } = await checkLibrary(
       path.join(merged, "library"),
       hasManifest(root) ? readManifest(root) : undefined,
@@ -844,30 +807,6 @@ async function checkResult(
     return { ok: !defects.size, defects: [...defects] };
   } finally {
     fs.rmSync(merged, { recursive: true, force: true });
-  }
-}
-
-/** The loops and roles the installer seeded into this project, as seeded, by their side, as a library holds them. */
-function layBaselines(root: string, library: string): void {
-  const seeded = path.join(root, ".contrejour", "seeded");
-  for (const [from, kind, extension] of [
-    ["agents", "roles", ".md"],
-    ["loops", "loops", ".md"],
-  ] as const) {
-    const dir = path.join(seeded, from);
-    if (!fs.existsSync(dir)) continue;
-    for (const file of fs.readdirSync(dir).filter((entry) => entry.endsWith(extension))) {
-      const text = fs.readFileSync(path.join(dir, file), "utf8");
-      const side = frontmatter(text).side;
-      if (!side) continue;
-      const target = path.join(library, kind, side);
-      fs.mkdirSync(target, { recursive: true });
-      fs.writeFileSync(path.join(target, file), text);
-      // A loop's script goes beside its definition.
-      const script = path.join(seeded, "workflows", file.replace(/\.md$/, ".js"));
-      if (kind === "loops" && fs.existsSync(script))
-        fs.copyFileSync(script, path.join(target, path.basename(script)));
-    }
   }
 }
 
@@ -915,29 +854,93 @@ function missingLibrary(checkouts: { name: string; checkout: string }[]): {
 } | null {
   if (checkouts.some((entry) => entry.name === COMMUNITY_LIBRARY)) return null;
   return {
-    reason: `no checkout of the community library is recorded for this project: \`library-cli.js clone\` fetches one from ${COMMUNITY_URL}`,
+    reason: `no checkout of the community library is recorded for this project: \`publish-cli.js clone\` fetches one from ${COMMUNITY_URL}`,
     upstream: COMMUNITY_URL,
   };
+}
+
+const NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+const metadataPath = (root: string): string =>
+  path.join(path.resolve(root), ".contrejour", "publish", "reference.json");
+const publishedPath = (root: string): string =>
+  path.join(path.resolve(root), ".contrejour", "published.json");
+
+/** The files a project got from the example it started from, which are its own to publish. */
+function exampleFiles(root: string): Set<string> {
+  const recorded = readJson(path.join(root, ".contrejour", "reference.json"));
+  return new Set(
+    isRecord(recorded) && Array.isArray(recorded.files)
+      ? recorded.files.filter((file): file is string => typeof file === "string")
+      : [],
+  );
+}
+
+/** What the published reference.json says: the owner's title and description, and the task loop with its values. */
+function publishedReference(
+  root: string,
+  name: string,
+): { text: string | null; problem: string | null } {
+  const drafted = readJson(metadataPath(root));
+  const texts = (value: unknown) =>
+    isRecord(value) &&
+    typeof value.zh === "string" &&
+    value.zh.trim() !== "" &&
+    typeof value.en === "string" &&
+    value.en.trim() !== "";
+  if (!isRecord(drafted) || !texts(drafted.title) || !texts(drafted.description))
+    return {
+      text: null,
+      problem:
+        "write .contrejour/publish/reference.json first: a title and a description, each in zh and en",
+    };
+  const chosen = readJson(selectedLoopPath(root));
+  if (!isRecord(chosen) || typeof chosen.loop !== "string" || !isRecord(chosen.params))
+    return { text: null, problem: "the project has no task loop yet: set it up first (setup)" };
+  const reference = {
+    name,
+    title: drafted.title,
+    description: drafted.description,
+    task_loop: chosen.loop,
+    params: chosen.params,
+  };
+  return { text: `${JSON.stringify(reference, null, 2)}\n`, problem: null };
+}
+
+/** The files the community's copy of a published project has, as of the community's base. */
+function filesAtBase(library: LibrarySource, dir: string): string[] {
+  return git(library.checkout, "ls-tree", "-r", "--name-only", library.ref, "--", dir)
+    .stdout.split("\n")
+    .filter(Boolean);
 }
 
 async function makePlan(
   root: string,
   exclude: string[],
-): Promise<{ plan: PublicPlan; selected: Classified[]; libraries: LibrarySource[] }> {
+  chosenName?: string,
+): Promise<{ plan: PublicPlan; selected: Classified[]; community: LibrarySource | null }> {
   const side = installedRole(root);
   const finished = finishedTasks(root, side, extensionOf(root));
+  const name = chosenName || projectSlug(root);
+  if (!NAME.test(name))
+    failA1(
+      "INVALID_VALUE",
+      "a published name is lowercase letters, digits, dots, dashes or underscores",
+    );
   const shared = {
     project: projectSlug(root),
     side,
+    name,
     eligible: finished.length > 0,
     finished_tasks: finished,
   };
   const checkouts = checkoutsOf(root);
   const missing = missingLibrary(checkouts);
-  if (missing) {
+  if (missing)
     return {
       plan: {
         ...shared,
+        metadata: { file: metadataPath(root), problem: null },
+        removed: [],
         library: { available: false, ...missing },
         libraries: [],
         selected: [],
@@ -949,17 +952,35 @@ async function makePlan(
         digest: null,
       },
       selected: [],
-      libraries: [],
+      community: null,
     };
-  }
-  const libraries = checkouts.map(({ name, checkout }) => resolveLibrary(name, checkout));
+  const libraries = checkouts.map(({ name: library, checkout }) =>
+    resolveLibrary(library, checkout),
+  );
+  const community = libraries.find((library) => library.name === COMMUNITY_LIBRARY)!;
+  const sent = sentHashes(root);
+  const dir = `projects/${name}`;
+  const existing = filesAtBase(community, dir);
+  const record = readJson(publishedPath(root));
+  const ours =
+    (isRecord(record) && record.name === name) ||
+    existing.some((file) => {
+      const text = showAtBase(community, file);
+      return text !== null && (sent.get(file)?.has(sha256(text)) ?? false);
+    });
   const installed = readJson(installationFile(root));
   const context: PlanContext = {
     root,
     side,
     sides: sidesOf(root),
-    libraries,
-    sent: sentHashes(root),
+    name,
+    community,
+    frameworkRoots: libraryRoots(root).filter(
+      (library) => path.basename(library) !== COMMUNITY_LIBRARY,
+    ),
+    fromExample: exampleFiles(root),
+    taken: existing.length > 0 && !ours,
+    sent,
     seeded: new Set(
       isRecord(installed) && Array.isArray(installed.seeded) ? (installed.seeded as string[]) : [],
     ),
@@ -969,7 +990,35 @@ async function makePlan(
   if (fs.existsSync(roles))
     for (const file of fs.readdirSync(roles).sort())
       if (file.endsWith(".md")) units.push(classifyRole(context, file.slice(0, -3)));
-  for (const name of listLoops(root)) units.push(await classifyLoop(context, name));
+  for (const loop of listLoops(root)) units.push(await classifyLoop(context, loop));
+
+  // What the project is: reference.json, which a new project started from it reads.
+  const reference = publishedReference(root, name);
+  const referenceTarget = `${dir}/reference.json`;
+  if (reference.text !== null) {
+    const theirs = showAtBase(community, referenceTarget);
+    const verdict = context.taken
+      ? { state: "conflict" as State, reason: TAKEN(name) }
+      : stateAgainstPublished(reference.text, theirs, sent.get(referenceTarget) ?? new Set());
+    units.push({
+      kind: "project",
+      name,
+      side: null,
+      library: COMMUNITY_LIBRARY,
+      description: "what the project is, and the task loop it runs with which values",
+      ...verdict,
+      warnings: [],
+      files: [
+        {
+          source: ".contrejour/publish/reference.json",
+          target: referenceTarget,
+          sha256: sha256(reference.text),
+        },
+      ],
+      finals: new Map([[referenceTarget, reference.text]]),
+      before: new Map(theirs === null ? [] : [[referenceTarget, theirs]]),
+    });
+  }
 
   const secrets = secretsOf(root);
   const hidden = hiddenPathsOf(root, side);
@@ -988,22 +1037,32 @@ async function makePlan(
       if (texts.some((text) => text.includes(known))) paths.add(known);
     if (paths.size)
       unit.warnings.push(`it names paths of this machine: ${[...paths].sort().join(", ")}`);
-    if (exclude.includes(unit.name)) {
+    if (unit.kind !== "project" && exclude.includes(unit.name)) {
       unit.state = "excluded";
       unit.reason = "the owner left it out";
     }
   }
   const selected = units.filter((unit) => SENDABLE.includes(unit.state));
+  // What the community's copy has that the project no longer does: a loop or role it removed, or one it now leaves as the framework gives it.
+  // A loop or role the project still has keeps its published copy, even while it fails its check or is left out.
+  const kept = new Set(
+    units
+      .filter((unit) => unit.state !== "unchanged" && unit.kind !== "project")
+      .flatMap((unit) =>
+        unit.kind === "role"
+          ? [`${dir}/roles/${unit.name}.md`]
+          : [`${dir}/loops/${unit.name}.md`, `${dir}/loops/${unit.name}.js`],
+      ),
+  );
+  kept.add(referenceTarget);
+  const removed = context.taken ? [] : existing.filter((file) => !kept.has(file)).sort();
   const leaving = selected
-    .flatMap((unit) =>
-      unit.files.map((file) => ({
-        library: unit.library,
-        target: file.target,
-        sha256: file.sha256,
-      })),
-    )
-    .sort((a, b) => `${a.library}/${a.target}`.localeCompare(`${b.library}/${b.target}`));
-  const digest = leaving.length ? sha256(JSON.stringify(leaving)) : null;
+    .flatMap((unit) => unit.files.map((file) => ({ target: file.target, sha256: file.sha256 })))
+    .sort((a, b) => a.target.localeCompare(b.target));
+  const digest =
+    reference.problem === null && (leaving.length || removed.length)
+      ? sha256(JSON.stringify({ name, leaving, removed }))
+      : null;
   const changesFile = writePreview(root, selected);
   const present = (unit: Classified): PlanUnit => {
     const { finals: _finals, before: _before, ...shown } = unit;
@@ -1021,7 +1080,9 @@ async function makePlan(
   return {
     plan: {
       ...shared,
-      library: view(libraries.find((library) => library.name === COMMUNITY_LIBRARY)!),
+      metadata: { file: metadataPath(root), problem: reference.problem },
+      removed,
+      library: view(community),
       libraries: libraries.map(view),
       selected: selected.map(present),
       not_selected: units
@@ -1029,12 +1090,12 @@ async function makePlan(
         .map(present),
       unchanged: units.filter((unit) => unit.state === "unchanged").length,
       changes_file: changesFile,
-      library_check: selected.length ? await checkResult(root, libraries, selected) : null,
+      library_check: selected.length ? await checkPublication(root, context, selected) : null,
       check: checkState(root, side, digest),
       digest,
     },
     selected,
-    libraries,
+    community,
   };
 }
 
@@ -1067,10 +1128,18 @@ function recordCheck(
   return { digest, verdict };
 }
 
+/**
+ * Fetch the community library: beside the Studio's checkout, where the Studio and
+ * every project installed from it find it, or in this project when it has none.
+ */
 function cloneLibrary(root: string): { checkout: string; cloned: boolean } {
   const known = checkoutsOf(root).find((entry) => entry.name === COMMUNITY_LIBRARY);
   if (known) return { checkout: known.checkout, cloned: false };
-  const target = communityClonePath(root);
+  const library = installedLibrary(root);
+  const target =
+    library && isOwnRepository(library)
+      ? path.join(library, COMMUNITY_LIBRARY)
+      : communityClonePath(root);
   fs.rmSync(target, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const cloned = run("git", ["clone", "--quiet", COMMUNITY_URL, target]);
@@ -1208,25 +1277,42 @@ function pushAndOpen(
   };
 }
 
-function pullRequestText(plan: PublicPlan, units: PlanUnit[]): { title: string; body: string } {
-  const added = units.filter((unit) => unit.state === "new").length;
-  const changed = units.length - added;
-  const title = `library: ${plan.project} (${plan.side}): ${[
-    ...(added ? [`${added} new`] : []),
-    ...(changed ? [`${changed} changed`] : []),
-  ].join(", ")}`;
-  const rows = units.map(
-    (unit) =>
-      `| ${unit.kind} | \`${unit.name}\` | ${unit.side} | ${unit.state} | ${unit.description.replace(/\|/g, "\\|")} |`,
-  );
+function pullRequestText(plan: PublicPlan, units: Classified[]): { title: string; body: string } {
+  const project = units.find((unit) => unit.kind === "project");
+  const reference = project
+    ? (JSON.parse([...project.finals.values()][0]!) as Record<string, any>)
+    : null;
+  const update = units.some((unit) => unit.state === "changed") || plan.removed.length > 0;
+  const title = `project: ${plan.name}${reference?.title?.en ? ` — ${reference.title.en}` : ""}${update ? " (update)" : ""}`;
+  const rows = units
+    .filter((unit) => unit.kind !== "project")
+    .map(
+      (unit) =>
+        `| ${unit.kind} | \`${unit.name}\` | ${unit.side} | ${unit.state} | ${unit.description.replace(/\|/g, "\\|")} |`,
+    );
   const body = [
-    `Contributed by a ${plan.side} project after ${plan.finished_tasks.length} finished task(s), through \`library-contribution\`: the loops and roles its owner chose to share, with the owner's approval.`,
+    `Published from the Studio by a ${plan.side} project after ${plan.finished_tasks.length} finished task(s), with its owner's approval: \`projects/${plan.name}/\`, an example any project can start from.`,
     "",
-    "| Kind | Name | Side | Change | What it is |",
-    "| --- | --- | --- | --- | --- |",
-    ...rows,
-    "",
-    `A changed one holds the project's version, merged with what changed here meanwhile; nothing else here is touched. \`library-cli.js\` ran the loop and role checks on the resulting library and found no key or token of the project in these files.${
+    ...(reference
+      ? [
+          `**${reference.title?.en ?? plan.name}** — ${reference.description?.en ?? ""}`,
+          "",
+          `Task loop \`${reference.task_loop}\`, with ${JSON.stringify(reference.params)}.`,
+          "",
+        ]
+      : []),
+    ...(rows.length
+      ? [
+          "| Kind | Name | Side | Change | What it is |",
+          "| --- | --- | --- | --- | --- |",
+          ...rows,
+          "",
+        ]
+      : []),
+    ...(plan.removed.length
+      ? [`Removed: ${plan.removed.map((file) => `\`${file}\``).join(", ")}.`, ""]
+      : []),
+    `The project's data, keys, task and run records are not in it. \`publish-cli.js\` checked its loops and roles over the framework's library and found no key or token of the project in these files.${
       plan.check === "passed"
         ? " The project's own check of what leaves passed exactly this text."
         : ""
@@ -1236,119 +1322,33 @@ function pullRequestText(plan: PublicPlan, units: PlanUnit[]): { title: string; 
   return { title, body };
 }
 
-interface Sent extends Published {
-  library: string;
-  status: "pushed" | "local-only" | "not-committed";
-  branch: string | null;
-  base: string;
-  files: string[];
-}
-
-/** Commit one library's part on a new branch, push it and open its pull request. */
-async function sendTo(
-  root: string,
-  plan: PublicPlan,
-  library: LibrarySource,
-  units: Classified[],
-): Promise<Sent> {
-  const files = units.flatMap((unit) => unit.files);
-  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  const stem = `library/${plan.project}-${plan.side}-${stamp}`;
-  const taken = (name: string) =>
-    git(library.checkout, "rev-parse", "--verify", "--quiet", `refs/heads/${name}`).ok ||
-    (library.remote !== null &&
-      git(
-        library.checkout,
-        "ls-remote",
-        "--heads",
-        "origin",
-        `refs/heads/${name}`,
-      ).stdout.trim() !== "");
-  let branch = stem;
-  for (let attempt = 2; taken(branch); attempt += 1) branch = `${stem}-${attempt}`;
-
-  const { title, body } = pullRequestText(plan, units);
-  let failure: string | null = null;
-  await inWorktree(root, library, ["-b", branch], (dir) => {
-    writeFinals(dir, units);
-    const added = git(dir, "add", "--", "library");
-    // The checkout's own hooks need its dependencies, and helper checks already ran on this text.
-    const commit = added.ok
-      ? git(dir, "commit", "--no-verify", "--quiet", "-m", title, "-m", body)
-      : added;
-    if (!commit.ok) {
-      git(library.checkout, "worktree", "remove", "--force", dir);
-      git(library.checkout, "branch", "-D", branch);
-      failure = `git could not commit in ${library.checkout}: ${commit.stderr}`;
-    }
-  });
-  if (failure !== null)
-    return {
-      library: library.name,
-      status: "not-committed",
-      branch: null,
-      base: library.branch,
-      pushed: false,
-      remote: null,
-      pull_request: null,
-      compare_url: null,
-      reason: failure,
-      files: files.map((file) => file.target),
-    };
-
-  const bodyFile = path.join(contributionsDir(root), "pull-request.md");
-  fs.writeFileSync(bodyFile, body);
-  const published = pushAndOpen(library, branch, title, bodyFile);
-  if (published.pushed) {
-    const log = readJson(logPath(root));
-    const contributions =
-      isRecord(log) && Array.isArray(log.contributions) ? log.contributions : [];
-    writeStateJsonAtomic(logPath(root), {
-      schema_version: 1,
-      contributions: [
-        ...contributions,
-        {
-          at: new Date().toISOString(),
-          library: library.name,
-          branch,
-          base: library.branch,
-          remote: published.remote,
-          pull_request: published.pull_request,
-          files: files.map((file) => ({ target: file.target, sha256: file.sha256 })),
-        },
-      ],
-    });
-  }
-  return {
-    library: library.name,
-    status: published.pushed ? "pushed" : "local-only",
-    branch,
-    base: library.branch,
-    ...published,
-    files: files.map((file) => file.target),
-  };
-}
-
-async function contribute(
+/** Publish exactly the plan with this digest: one pull request to the community library. */
+async function publish(
   root: string,
   digest: string,
   exclude: string[],
-): Promise<{
-  status: "pushed" | "partly-pushed" | "local-only";
-  reason: string | null;
-  pull_requests: Sent[];
-  files: string[];
-}> {
-  const { plan, selected, libraries } = await makePlan(root, exclude);
-  if (!plan.library.available || !libraries.length)
+  chosenName?: string,
+): Promise<
+  Published & {
+    status: "pushed" | "local-only";
+    name: string;
+    branch: string;
+    base: string;
+    files: string[];
+    removed: string[];
+  }
+> {
+  const { plan, selected, community } = await makePlan(root, exclude, chosenName);
+  if (!plan.library.available || !community)
     failA1("LIBRARY_UNAVAILABLE", plan.library.available ? "" : plan.library.reason);
   if (!plan.eligible)
     failA1(
       "NO_FINISHED_TASK",
-      "a project contributes once at least one of its tasks has finished, as its rules count them (by default, a run of its task loop)",
+      "a project publishes once at least one of its tasks has finished, as its rules count them (by default, a run of its task loop)",
     );
+  if (plan.metadata.problem) failA1("NO_DESCRIPTION", plan.metadata.problem);
   if (!plan.digest)
-    failA1("NOTHING_TO_CONTRIBUTE", "this project has nothing new or changed to contribute");
+    failA1("NOTHING_TO_PUBLISH", "the community library already has exactly this project");
   if (digest !== plan.digest)
     failA1(
       "PLAN_CHANGED",
@@ -1364,27 +1364,84 @@ async function contribute(
   if (plan.check === "failed")
     failA1("CHECK_FAILED", "the project's check found something in these files that may not leave");
 
-  // Every contribution goes to the community library: one pull request.
-  const sent: Sent[] = [];
-  for (const library of libraries) {
-    const units = selected.filter((unit) => unit.library === library.name);
-    if (units.length) sent.push(await sendTo(root, plan, library, units));
+  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const stem = `publish/${plan.name}-${stamp}`;
+  const taken = (name: string) =>
+    git(community.checkout, "rev-parse", "--verify", "--quiet", `refs/heads/${name}`).ok ||
+    (community.remote !== null &&
+      git(
+        community.checkout,
+        "ls-remote",
+        "--heads",
+        "origin",
+        `refs/heads/${name}`,
+      ).stdout.trim() !== "");
+  let branch = stem;
+  for (let attempt = 2; taken(branch); attempt += 1) branch = `${stem}-${attempt}`;
+  const { title, body } = pullRequestText(plan, selected);
+  let failure: string | null = null;
+  await inWorktree(root, community, ["-b", branch], (dir) => {
+    writeFinals(dir, selected);
+    for (const file of plan.removed) git(dir, "rm", "--quiet", "--", file);
+    const added = git(dir, "add", "--all", "--", `projects/${plan.name}`);
+    // The checkout's own hooks need its dependencies, and the helper's checks already ran on this text.
+    const commit = added.ok
+      ? git(dir, "commit", "--no-verify", "--quiet", "-m", title, "-m", body)
+      : added;
+    if (!commit.ok) {
+      git(community.checkout, "worktree", "remove", "--force", dir);
+      git(community.checkout, "branch", "-D", branch);
+      failure = `git could not commit in ${community.checkout}: ${commit.stderr}`;
+    }
+  });
+  if (failure !== null) failA1("COMMIT_FAILED", failure);
+  const bodyFile = path.join(contributionsDir(root), "pull-request.md");
+  fs.writeFileSync(bodyFile, body);
+  const published = pushAndOpen(community, branch, title, bodyFile);
+  const files = selected.flatMap((unit) => unit.files);
+  if (published.pushed) {
+    const log = readJson(logPath(root));
+    const entries = isRecord(log) && Array.isArray(log.contributions) ? log.contributions : [];
+    writeStateJsonAtomic(logPath(root), {
+      schema_version: 1,
+      contributions: [
+        ...entries,
+        {
+          at: new Date().toISOString(),
+          name: plan.name,
+          branch,
+          base: community.branch,
+          remote: published.remote,
+          pull_request: published.pull_request,
+          files: files.map((file) => ({ target: file.target, sha256: file.sha256 })),
+          removed: plan.removed,
+        },
+      ],
+    });
+    // The project's published state: where its latest publication is.
+    writeStateJsonAtomic(publishedPath(root), {
+      schema_version: 1,
+      name: plan.name,
+      at: new Date().toISOString(),
+      branch,
+      pull_request: published.pull_request,
+      compare_url: published.compare_url,
+    });
   }
   fs.rmSync(previewDir(root), { recursive: true, force: true });
-  const pushed = sent.filter((entry) => entry.pushed).length;
-  const reasons = sent
-    .filter((entry) => entry.reason)
-    .map((entry) => (sent.length > 1 ? `${entry.library}: ${entry.reason}` : entry.reason!));
   return {
-    status: pushed === sent.length ? "pushed" : pushed ? "partly-pushed" : "local-only",
-    reason: reasons.join("; ") || null,
-    pull_requests: sent,
-    files: sent.flatMap((entry) => entry.files),
+    status: published.pushed ? "pushed" : "local-only",
+    name: plan.name,
+    branch,
+    base: community.branch,
+    ...published,
+    files: files.map((file) => file.target),
+    removed: plan.removed,
   };
 }
 
 function cli(): void {
-  const program = createCli("library", "Contribute a project's loops and roles to the library");
+  const program = createCli("publish", "Publish this project to the community library");
   const names = (value: string | undefined) =>
     (value ?? "")
       .split(",")
@@ -1420,13 +1477,16 @@ function cli(): void {
   program
     .command("plan")
     .description(
-      "List the loops and roles this project could contribute, new and changed, with the digest contribute requires",
+      "List what publishing this project would put in the community library, with the digest publish requires",
     )
     .requiredOption("--project <dir>")
+    .option("--name <name>", "the name to publish it under (default: the project's folder name)")
     .option("--exclude <names>", "comma-separated loops and roles the owner leaves out")
-    .action((options: { project: string; exclude?: string }) =>
+    .action((options: { project: string; name?: string; exclude?: string }) =>
       action(
-        async () => (await makePlan(path.resolve(options.project), names(options.exclude))).plan,
+        async () =>
+          (await makePlan(path.resolve(options.project), names(options.exclude), options.name))
+            .plan,
       )(),
     );
   program
@@ -1454,16 +1514,22 @@ function cli(): void {
       )(),
     );
   program
-    .command("contribute")
+    .command("publish")
     .description(
-      "Send exactly what the plan with this digest lists, as a pull request to the community library",
+      "Publish exactly the plan with this digest, as a pull request to the community library",
     )
     .requiredOption("--project <dir>")
     .requiredOption("--digest <sha256>", "the digest of the plan the owner approved")
+    .option("--name <name>", "the same name the plan was made with")
     .option("--exclude <names>", "the same list the plan was made with")
-    .action((options: { project: string; digest: string; exclude?: string }) =>
+    .action((options: { project: string; digest: string; name?: string; exclude?: string }) =>
       action(() =>
-        contribute(path.resolve(options.project), options.digest, names(options.exclude)),
+        publish(
+          path.resolve(options.project),
+          options.digest,
+          names(options.exclude),
+          options.name,
+        ),
       )(),
     );
   runCli(program);

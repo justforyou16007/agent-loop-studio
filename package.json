@@ -10,6 +10,7 @@
   },
   "type": "module",
   "scripts": {
+    "start": "node dist/tools/studio.js",
     "build": "npm run clean && tsc -p tsconfig.json && npm run build:studio",
     "build:studio": "vite build --config studio/vite.config.ts --logLevel warn",
     "clean": "node tools/clean.mjs",

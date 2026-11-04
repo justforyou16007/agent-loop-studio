@@ -7,6 +7,7 @@ import {
   LayoutPanelLeft,
   FlaskConical,
   Play,
+  Send,
   RefreshCw,
   SlidersHorizontal,
   Users,
@@ -371,6 +372,24 @@ export function App() {
       say({ from: "studio", text: t("failed_start") + (reason as Error).message });
     }
   };
+  /** The whole project, published to the community library: the publish loop puts exactly what leaves to the owner first. */
+  const publishIt = async () => {
+    try {
+      const started = await api.run("publish");
+      setConversation(started.id);
+      setStatus(null);
+      handled.current = "";
+      setPage("compose");
+      pendingMessage.current = say({
+        from: "studio",
+        key: "publish_launched",
+        values: { session: started.session },
+        pending: true,
+      });
+    } catch (reason) {
+      say({ from: "studio", text: t("failed_start") + (reason as Error).message });
+    }
+  };
   /** The loop on the canvas, tried the way it will run: loop-trial asks in the chat whether it serves the goal. */
   const tryIt = async () => {
     if (!flow) return;
@@ -440,6 +459,17 @@ export function App() {
               <span className="text-ink-3">{overview.project.side}</span>
             </span>
           )}
+          {overview &&
+            overview.loops.some((loop) => loop.name === "publish" && loop.source === "project") && (
+              <Button
+                size="sm"
+                title={t("publish_hint")}
+                disabled={status?.state === "running"}
+                onClick={() => void publishIt()}
+              >
+                <Send size={13} /> {t("publish_button")}
+              </Button>
+            )}
           <nav className="ml-2 flex items-center gap-1">
             {(
               [

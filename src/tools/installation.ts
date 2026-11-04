@@ -20,7 +20,7 @@ export const WORKFLOWS_DIR = ".claude/workflows";
 
 export const installationFile = (root: string): string =>
   path.join(path.resolve(root), ".contrejour", "install.json");
-/** What library-cli.js keeps about this project's contributions to the shared library. */
+/** What publish-cli.js keeps about this project's publications to the community library. */
 export const contributionsDir = (root: string): string =>
   path.join(path.resolve(root), ".contrejour", "contributions");
 
@@ -78,6 +78,10 @@ export function installedLibrary(root: string): string | null {
  * holds `library/loops/<side>/` and `library/roles/<side>/`; the first holding a
  * file wins.
  */
+/** The community library: where projects are published, and where the Studio finds the examples to start from. */
+export const COMMUNITY_LIBRARY = "agent-loop-community";
+export const COMMUNITY_URL = "https://github.com/justforyou16007/agent-loop-community.git";
+
 export function libraryRoots(root: string): string[] {
   const library = installedLibrary(root);
   if (!library) return [];

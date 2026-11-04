@@ -185,12 +185,18 @@ export interface ProjectsInfo {
     package: string | null;
     profile: string | null;
     loop: string | null;
+    /** Its latest publication to the community library, when it has one. */
+    published: { name: string; at: string; pull_request: string | null } | null;
   }[];
   references: {
     name: string;
     title: { zh: string; en: string };
     description: { zh: string; en: string };
     task_loop: string;
+    /** The framework's own reference project, or a project published to the community library. */
+    source: "framework" | "community";
   }[];
   can_create: boolean;
+  /** Whether the community library is beside the Studio's checkout, so its published projects can be started from. */
+  community: { present: boolean };
 }

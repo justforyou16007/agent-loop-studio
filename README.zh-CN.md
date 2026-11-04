@@ -2,51 +2,32 @@
 
 在 Claude Code 上运行的 agent 流程框架。**流程**（loop）负责调度**角色**：每一步由哪个角色做、按什么顺序、在什么条件下分支、最多重复几次、在哪里停下等 owner 决定。**角色**是一个 Claude Code agent 文件，只做一步。**会话**只负责启动流程、把 owner 的回答带进流程。流程之外没有任何调度，角色从不直接调用别的角色，owner 的每个决定都是流程里的一个 `owner-review` 步骤。
 
-框架负责创建、复用和优化流程与角色：
+流程在 Studio 里编辑和运行，发布到社区库：
 
-- **Studio**：owner 在本机浏览器里用的控制台。在对话框里说想要什么，它马上列出相近的流程，每个都能预览流程图，并把最接近的画到画布上，超参数排在旁边、用虚线连到它们影响的步骤。点步骤或箭头、说要怎么改，`loop-authoring` 就在后台 Claude Code 会话里起草修改，改好后停下请你审核，草稿画在画布上。在这里还可以选定项目的主任务流程和超参数、运行任意流程并看着它一步步执行、在对话里修改角色，以及管理工作区里的多个项目：从参考项目新建，或复制已有项目。
-- **基础角色和流程**：`setup`（以及 `project-setup`），每个项目都有，Studio 打开新项目时默认加载它：它设置项目的 workflow——从合适的流程里找出符合你想法的主任务流程，按你的话修改或新建，定好参数，检查后交接。`loop-trial`（以及 `loop-tester`）按真实运行的方式检查一个流程：先静态检查，再真跑一小轮，请你判断是否符合你的目标，不符合就优化后再试。`loop-authoring`、`role-authoring`（以及 `loop-query`、`loop-editor`、`role-creator`），`owner-review`；`trajectory-optimizer` 根据轨迹修复项目里的角色；`project-memory` 记下做成了什么、没做成什么及原因；`task-manager` 是会话的角色。项目做的优化留在项目里；`library-contribution`（以及 `library-contributor`，项目需要自查时还有 `contribution-check`）只在你决定贡献、并审过要发出的确切内容后，把你选中的流程和角色上传到社区库。
+- **编辑态：Studio。** 每台机器装一次的应用，owner 在浏览器里用的控制台。它管理一个工作区里的多个项目：新建空项目、从框架示例或社区里已发布的项目新建、复制、打开。在对话框里说想要什么，它马上列出相近的流程，每个都能预览流程图，并把最接近的画到画布上，超参数排在旁边、用虚线连到它们影响的步骤。点步骤或箭头、说要怎么改，`loop-authoring` 在后台 Claude Code 会话里起草修改，改好后停下请你审核。在这里设置项目的 workflow（`setup`），把流程真跑一小轮试试（「试运行」，`loop-trial`），运行并看着它一步步执行，在对话里修改角色。项目做的优化（主要是根据轨迹修好的角色）留在项目里。
+- **发布态：社区库。** 你决定时，「发布到社区」把整个项目作为示例放进 [agent-loop-community](https://github.com/justforyou16007/agent-loop-community)：项目是做什么的、运行哪个主任务流程和参数，以及项目自己的全部流程和角色。发出前你先审核确切内容，然后开一个 PR，由社区的维护者审核合并。别的机器上的 Studio 就能从它新建项目。
+- **基础角色和流程**：`setup`（以及 `project-setup`）设置项目的 workflow：从合适的流程里找出符合你想法的主任务流程，按你的话修改或新建，定好参数，检查后交接。`loop-trial`（以及 `loop-tester`）按真实运行的方式检查一个流程：先静态检查，再真跑一小轮，请你判断是否符合目标，不符合就优化后再试。`publish`（以及 `project-publisher`，项目需要自查时还有 `publish-check`）发布项目。`loop-authoring`、`role-authoring`（以及 `loop-query`、`loop-editor`、`role-creator`），`owner-review`，`trajectory-optimizer`，`project-memory` 记下做成了什么、没做成什么及原因，`task-manager` 是会话的角色。
 - **检查**：`loop-check` 不调用模型，用假角色把流程脚本跑几遍、走到每个分支；角色文件检查优化器依赖的各节是否齐全。
 - **hooks** 只做记录或拦截：每个结束的角色留下轨迹；交给流程的回答必须是 owner 在流程提问之后亲手输入的消息。
 
-项目之间共享的流程和角色放在 [agent-loop-community](https://github.com/justforyou16007/agent-loop-community)。项目包用 git 子模块引用这两个仓库，版本由项目自己固定；它们从不反过来依赖任何项目。[auto-dl-loop](https://github.com/justforyou16007/auto-dl-loop)（双机研究任务）就是一个项目包。
+## 安装 Studio
 
-## 安装一个项目
-
-在本地仓库里（Node.js 22.12+）：
+每台机器装一次，在本地仓库里（需要 Node.js 22.12+ 和 Claude Code）：
 
 ```bash
 git clone https://github.com/justforyou16007/agent-loop-studio.git
 cd agent-loop-studio
 npm ci && npm run build
-bash distribution/install-contrejour.sh --role default --project /path/to/project
+npm start
 ```
 
-安装器只写项目目录（`.contrejour/`、`.claude/`），不碰全局配置，也不下载任何东西。然后打开 Studio：
+它会打印一个一次性登录链接，在浏览器里打开即可。Studio 只在本机地址上响应；要在别的机器上用，先转发端口（`ssh -L 8790:127.0.0.1:8790 <机器>`）。项目默认放在 `~/agent-loop-projects`（用 `--workspace <目录>` 或环境变量 `AGENT_LOOP_WORKSPACE` 换一个）。
 
-```bash
-node /path/to/project/.contrejour/dist/tools/studio.js --project /path/to/project
-```
-
-它会打印一个一次性登录链接，在浏览器里打开即可。Studio 只在本机地址上响应；要在别的机器上用，先转发端口（`ssh -L 8790:127.0.0.1:8790 <机器>`）。先在项目里打开一次 `claude` 并接受信任提示：后台会话只在受信任的目录里启动。还没设置的项目打开时，画布上就是它的 `setup` 流程：点「运行」，它需要你决定时会在对话里问你。「运行」旁边的「试运行」用 `loop-trial` 试跑画布上的流程。
-
-要管理多个项目，就让 Studio 打开一个装着这些项目的目录，并指定这个仓库作为新项目的来源：
-
-```bash
-node dist/tools/studio.js --workspace ~/projects --library "$PWD"
-```
-
-想复用其他项目分享出来的流程和角色，就把社区库克隆进这个仓库一次（这里的 git 会忽略它）：
-
-```bash
-git clone https://github.com/justforyou16007/agent-loop-community.git agent-loop-community
-```
-
-之后从这个仓库安装的项目就能在 Studio 里找到社区库的流程和角色，`library-contribution` 也会把你选中要贡献的内容送到那里。没有克隆时，贡献流程会先问你要不要获取一份。
+在「项目」页先获取一次社区库（克隆到本仓库旁边，git 会忽略它），然后新建项目：空项目、从框架示例或社区项目开始都可以。项目文件夹由 Studio 建好，里面有 Claude Code 运行它需要的一切，你不用自己往里装任何东西。先在新项目的文件夹里打开一次 `claude` 并接受信任提示：后台会话只在受信任的目录里启动。还没设置的项目打开时，画布上就是它的 `setup` 流程：点「运行」，它需要你决定时会在对话里问你。「运行」旁边的「试运行」试跑画布上的流程；顶部的「发布到社区」发布这个项目。
 
 ## 项目包
 
-基于框架的项目包在 `project.json` 里说明自己：有哪几种 profile（每种的会话入口角色、角色和流程来自流程库的哪几部分）、加了哪些 hook 动作，以及框架在需要项目决定的地方调用的扩展模块（怎样算"有任务完成"、哪些东西不能随贡献发出、贡献发出前要过的检查）。项目给框架角色的规则写在 `skills/shared-references/project-rules.md`。详见 [docs/architecture.md](docs/architecture.md)。
+在 Studio 里建的项目不需要额外的东西。为某一类特殊项目（多台机器协作、有自己的 helper、发布前要特殊检查）构建在框架上的项目包，在 `project.json` 里说明自己：有哪几种 profile（每种的会话入口角色、角色和流程来自流程库的哪几部分）、加了哪些 hook 动作，以及框架在需要项目决定的地方调用的扩展模块（怎样算"有任务完成"、哪些东西不能随发布发出、发布前要过的检查）。项目给框架角色的规则写在 `skills/shared-references/project-rules.md`。详见 [docs/architecture.md](docs/architecture.md)。
 
 ## 开发
 

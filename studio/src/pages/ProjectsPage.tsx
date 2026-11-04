@@ -1,4 +1,4 @@
-import { Copy, FolderOpen, Plus } from "lucide-react";
+import { Copy, DownloadCloud, FolderOpen, Plus, Send } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ProjectsInfo } from "../../../src/tools/studio-types.js";
 import { api } from "../api.js";
@@ -40,6 +40,19 @@ export function ProjectsPage({ onOpened }: { onOpened: () => void }) {
     }
   };
   const valid = /^[a-z0-9][a-z0-9._-]{0,63}$/.test(name);
+  /** Fetch the community library beside the Studio, or bring it up to date: its projects become examples. */
+  const fetchCommunity = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.fetchCommunity();
+      await load();
+    } catch (reason) {
+      setError(t("project_failed") + (reason as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <div className="scroll-thin h-full overflow-y-auto px-8 py-6">
@@ -78,6 +91,27 @@ export function ProjectsPage({ onOpened }: { onOpened: () => void }) {
                 </div>
                 <p className="mt-1.5 text-xs text-ink-3">
                   {project.loop ? `${t("project_loop")}: ${project.loop}` : t("project_no_loop")}
+                </p>
+                <p className="mt-0.5 flex items-center gap-1 text-xs text-ink-4">
+                  {project.published ? (
+                    <>
+                      <Send size={11} />
+                      {project.published.pull_request ? (
+                        <a
+                          href={project.published.pull_request}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="underline"
+                        >
+                          {t("project_published", { name: project.published.name })}
+                        </a>
+                      ) : (
+                        t("project_published", { name: project.published.name })
+                      )}
+                    </>
+                  ) : (
+                    t("project_draft")
+                  )}
                 </p>
                 {copying === project.name ? (
                   <div className="mt-2 flex gap-1.5">
@@ -139,9 +173,22 @@ export function ProjectsPage({ onOpened }: { onOpened: () => void }) {
                   className="mt-1 block h-8 w-72 rounded-lg border border-line-strong px-2 font-mono text-[13px]"
                 />
               </label>
-              <div className="mt-4 text-xs font-semibold uppercase tracking-wide text-ink-4">
+              <div className="mt-4 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-ink-4">
                 {t("project_from")}
+                {info?.community.present && (
+                  <Button size="sm" disabled={busy} onClick={() => void fetchCommunity()}>
+                    <DownloadCloud size={12} /> {t("community_update")}
+                  </Button>
+                )}
               </div>
+              {info && !info.community.present && (
+                <div className="mt-2 flex items-center gap-2 rounded-lg bg-canvas px-3 py-2 text-xs text-ink-3">
+                  <span className="flex-1">{t("community_missing")}</span>
+                  <Button size="sm" disabled={busy} onClick={() => void fetchCommunity()}>
+                    <DownloadCloud size={12} /> {t("community_fetch")}
+                  </Button>
+                </div>
+              )}
               <div className="mt-2 grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
                 {info?.references.map((entry) => (
                   <button
@@ -155,7 +202,16 @@ export function ProjectsPage({ onOpened }: { onOpened: () => void }) {
                         : "border-line hover:bg-canvas",
                     )}
                   >
-                    <div className="text-[13px] font-semibold">{entry.title[lang]}</div>
+                    <div className="flex items-center gap-1.5 text-[13px] font-semibold">
+                      {entry.title[lang]}
+                      <Badge tone={entry.source === "community" ? "brand" : "outline"}>
+                        {t(
+                          entry.source === "community"
+                            ? "project_source_community"
+                            : "project_source_framework",
+                        )}
+                      </Badge>
+                    </div>
                     <p className="mt-1 text-xs leading-5 text-ink-3">{entry.description[lang]}</p>
                   </button>
                 ))}
