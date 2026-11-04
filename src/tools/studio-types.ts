@@ -58,12 +58,16 @@ export interface FlowParam {
 export interface RoleSummary {
   name: string;
   source: LoopSource;
+  /** One of the framework's base roles, as the project got it: shown apart from the project's own. */
+  framework: boolean;
   side: string;
   description: string;
 }
 export interface LoopSummary {
   name: string;
   source: LoopSource;
+  /** One of the framework's base loops, as the project got it: shown apart from the project's own. */
+  framework: boolean;
   side: string;
   kind: string;
   description: string;
@@ -104,6 +108,8 @@ export interface ProjectSummary {
   chosen: { loop: string; params: Record<string, unknown> } | null;
   /** When the project's setup loop last finished; null while the project is not set up. */
   setup_finished: string | null;
+  /** The example the project started from; null for a project started empty. */
+  example: string | null;
 }
 export interface Overview {
   project: ProjectSummary;

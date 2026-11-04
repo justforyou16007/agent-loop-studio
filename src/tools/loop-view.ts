@@ -66,6 +66,8 @@ export interface RunView {
 export interface LoopView {
   name: string;
   source: "project" | "library";
+  /** One of the framework's base loops, as the project got it: shown apart from the project's own. */
+  framework: boolean;
   side: string;
   kind: string;
   description: string;
@@ -88,6 +90,8 @@ export interface LoopView {
 export interface RoleView {
   name: string;
   source: "project" | "library";
+  /** One of the framework's base roles, as the project got it. */
+  framework: boolean;
   side: string;
   description: string;
   tools: string;
@@ -105,6 +109,8 @@ export interface ViewData {
     chosen: { loop: string; params: Record<string, unknown> } | null;
     /** When the project's setup loop last finished; null while the project is not set up. */
     setup_finished: string | null;
+    /** The example the project started from; null for a project started empty. */
+    example: string | null;
     generated_at: string;
     /** Served by the helper, so the page can reload it; false in a written snapshot. */
     live: boolean;
@@ -234,12 +240,14 @@ interface RoleFile {
   name: string;
   source: "project" | "library";
   text: string;
+  framework?: boolean;
 }
 interface LoopFile {
   name: string;
   source: "project" | "library";
   definition: string;
   script: string | null;
+  framework?: boolean;
 }
 
 /**
@@ -395,6 +403,7 @@ async function describeLoop(file: LoopFile, context: LoopContext): Promise<LoopV
   return {
     name: file.name,
     source: file.source,
+    framework: Boolean(file.framework),
     side: fields.side ?? "unknown",
     kind: fields.kind ?? "task",
     description: fields.description ?? "",
@@ -422,6 +431,7 @@ function describeRole(file: RoleFile, loops: LoopView[]): RoleView {
   return {
     name: file.name,
     source: file.source,
+    framework: Boolean(file.framework),
     side: fields.side ?? "unknown",
     description: fields.description ?? "",
     tools: fields.tools ?? "",
@@ -431,6 +441,50 @@ function describeRole(file: RoleFile, loops: LoopView[]): RoleView {
       .join("\n\n"),
     used_by: loops.filter((loop) => loop.roles.includes(file.name)).map((loop) => loop.name),
   };
+}
+
+/**
+ * Whether a loop or role of the project is one of the framework's base ones as
+ * the project got it: in agent-loop-studio's own library, unchanged since it was
+ * installed (or the same as the framework's), and not given by the example the
+ * project started from. Changed, it is the project's own.
+ */
+function frameworkBase(
+  root: string,
+  library: string | null,
+): (dir: "loops" | "agents", name: string, text: string) => boolean {
+  let framework: string | null = null;
+  if (library)
+    try {
+      framework =
+        libraryRoots(root).find((candidate) => {
+          const manifest = readJson(path.join(candidate, "project.json"));
+          return isRecord(manifest) && manifest.name === "agent-loop-studio";
+        }) ?? null;
+    } catch {
+      framework = null;
+    }
+  const recorded = readJson(path.join(root, ".contrejour", "reference.json"));
+  const fromExample = new Set(
+    isRecord(recorded) && Array.isArray(recorded.files)
+      ? recorded.files.filter((file): file is string => typeof file === "string")
+      : [],
+  );
+  const lines = (text: string | null) => text?.replace(/\r\n/g, "\n") ?? null;
+  return (dir, name, text) => {
+    if (!framework || fromExample.has(`.claude/${dir}/${name}.md`)) return false;
+    const kind = dir === "loops" ? "loops" : "roles";
+    const base = lines(readText(path.join(framework, "library", kind, "framework", `${name}.md`)));
+    if (base === null) return false;
+    const seeded = lines(readText(path.join(root, ".contrejour", "seeded", dir, `${name}.md`)));
+    return lines(text) === base || lines(text) === seeded;
+  };
+}
+
+/** The example the project started from, as `.contrejour/reference.json` records it. */
+function exampleOf(root: string): string | null {
+  const recorded = readJson(path.join(root, ".contrejour", "reference.json"));
+  return isRecord(recorded) && typeof recorded.name === "string" ? recorded.name : null;
 }
 
 /** Everything the page shows, read from the project (and its library) as it is now. */
@@ -451,19 +505,28 @@ export async function collectView(projectRoot: string, live = false): Promise<Vi
       : null;
 
   const extra = library ? libraryFiles(root) : { loops: [], roles: [] };
-  const roleFiles: RoleFile[] = markdownFiles(rolesDir(root)).map((file) => ({
-    name: file.slice(0, -3),
-    source: "project",
-    text: readText(path.join(rolesDir(root), file)) ?? "",
-  }));
+  const isBase = frameworkBase(root, library);
+  const roleFiles: RoleFile[] = markdownFiles(rolesDir(root)).map((file) => {
+    const text = readText(path.join(rolesDir(root), file)) ?? "";
+    return {
+      name: file.slice(0, -3),
+      source: "project",
+      text,
+      framework: isBase("agents", file.slice(0, -3), text),
+    };
+  });
   for (const role of extra.roles)
     if (!roleFiles.some((known) => known.name === role.name)) roleFiles.push(role);
-  const loopFiles: LoopFile[] = listLoops(root).map((name) => ({
-    name,
-    source: "project",
-    definition: readText(loopDefinitionPath(root, name)) ?? "",
-    script: readText(loopScriptPath(root, name)),
-  }));
+  const loopFiles: LoopFile[] = listLoops(root).map((name) => {
+    const definition = readText(loopDefinitionPath(root, name)) ?? "";
+    return {
+      name,
+      source: "project",
+      definition,
+      script: readText(loopScriptPath(root, name)),
+      framework: isBase("loops", name, definition),
+    };
+  });
   for (const loop of extra.loops)
     if (!loopFiles.some((known) => known.name === loop.name)) loopFiles.push(loop);
 
@@ -496,6 +559,7 @@ export async function collectView(projectRoot: string, live = false): Promise<Vi
       language: projectLanguage(root),
       chosen,
       setup_finished: setupFinishedAt(root),
+      example: exampleOf(root),
       generated_at: new Date().toISOString(),
       live,
     },

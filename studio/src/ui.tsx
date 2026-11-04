@@ -37,6 +37,10 @@ const TONES: Record<Tone, string> = {
   outline: "border border-line text-ink-3",
 };
 
+/** Where a loop or role comes from, as the page says it: the project's own, the framework's as installed, or the library's. */
+export const sourceKey = (entry: { source: string; framework: boolean }): TextKey =>
+  entry.framework ? "source_framework" : (`source_${entry.source}` as TextKey);
+
 export function LoopBadges({ loop, compact = false }: { loop: LoopSummary; compact?: boolean }) {
   const { t } = useLang();
   const check: Record<LoopSummary["check"], Tone> = {
@@ -50,7 +54,7 @@ export function LoopBadges({ loop, compact = false }: { loop: LoopSummary; compa
       <Badge tone={loop.kind === "task" ? "brand" : loop.kind === "setup" ? "loop" : "gray"}>
         {t(`kind_${loop.kind}` as TextKey)}
       </Badge>
-      <Badge tone="outline">{t(`source_${loop.source}` as TextKey)}</Badge>
+      <Badge tone="outline">{t(sourceKey(loop))}</Badge>
       {loop.chosen && <Badge tone="wait">★ {t("chosen")}</Badge>}
       {!compact && loop.source === "project" && (
         <Badge tone={check[loop.check]}>{t(`check_${loop.check}` as TextKey)}</Badge>

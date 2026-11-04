@@ -66,6 +66,8 @@ const zh = {
   welcome:
     "说说你想要什么样的流程。我会先在本项目和流程库里找出相近的，每个都可以预览，选中的放到画布上；之后用一句话告诉我怎么改，输入 @ 或点画布上的方块、箭头就能引用它们。",
   welcome_chosen: "这个项目的主任务流程是 {loop}，已经放在画布上。",
+  welcome_empty:
+    "这是个空项目，还没有自己的流程。在下面说说你想让它做什么：我会先找相近的已有流程，找不到就按你的描述新建。框架自带的流程（比如一步步帮你设好主任务流程的 setup）在流程列表的「框架」一组里，需要时选出来运行。",
   welcome_setup:
     "这个项目的 workflow 还没有设置。画布上是它的 setup 流程：问清你想让项目做什么，推荐合适的主任务流程和参数（也可以按你的话修改或新建），检查后交接。点「运行」开始，它每次需要你决定时都会在这里问你。",
   composer: "描述你想要的流程；输入 @ 可以引用画布上的步骤、箭头或参数…",
@@ -79,7 +81,7 @@ const zh = {
   ref_param: "参数",
   searching: "正在找相近的流程…",
   found: "找到 {n} 个相近的流程，按相近程度排列：",
-  found_none: "没有明显相近的流程，下面是全部可用的流程：",
+  found_none_new: "没有找到相近的已有流程，按你的描述新建：",
   matched: "匹配",
   preview: "预览",
   open: "放到画布",
@@ -162,9 +164,13 @@ const zh = {
   remove: "移除",
   examples: "试试这样说",
   example_1: "读题目生成 N 个 idea，评分后记入项目记忆，用 UCB 挑选做实验并提交最优版本",
-  example_2: "把项目新增的角色和流程贡献到流程库，提交前给我审核",
+  example_2: "做一个先写测试、再写实现、测试全部通过才算完成的流程",
   example_3: "按我的描述新建一个角色",
   canvas_empty: "画布上还没有流程。在左边说说你想要什么，或者从这里选一个：",
+  loops_own: "本项目的流程",
+  loops_own_none: "这个项目还没有自己的流程：在左边的对话里说说想要什么，就会找相近的或新建。",
+  loops_framework: "框架自带的流程",
+  loops_library: "流程库里的流程",
   use_this: "就用这个",
   definition: "定义原文",
   close: "关闭",
@@ -172,6 +178,7 @@ const zh = {
   kind_setup: "项目设置",
   "kind_on-request": "按需运行",
   source_project: "本项目",
+  source_framework: "框架",
   source_library: "流程库",
   check_ok: "检查通过",
   check_stale: "脚本过期",
@@ -284,6 +291,8 @@ const en: Record<TextKey, string> = {
   welcome:
     "Say what loop you want. I first find the close ones in this project and the library; preview any of them and put the one you pick on the canvas. Then tell me what to change in a sentence; type @ or click boxes and arrows on the canvas to point at them.",
   welcome_chosen: "This project's task loop is {loop}; it is on the canvas.",
+  welcome_empty:
+    "This is an empty project, with no loop of its own yet. Say below what it should do: I look for close loops first, and build one from your words when none is close. The framework's own loops (such as setup, which sets up the task loop step by step) are in the Framework group of the loop list; pick one when you need it.",
   welcome_setup:
     "This project's workflow is not set up yet. Its setup loop is on the canvas: what you want the project to do, the task loop and parameters that fit (changed or built as you say), a check and the hand-off. Press Run to start it; it asks you here whenever it needs a decision.",
   composer:
@@ -298,7 +307,7 @@ const en: Record<TextKey, string> = {
   ref_param: "Parameter",
   searching: "Looking for close loops…",
   found: "{n} close loops, closest first:",
-  found_none: "Nothing obviously close; here are all the loops:",
+  found_none_new: "No existing loop is close; building one from your words:",
   matched: "Matched",
   preview: "Preview",
   open: "Put on canvas",
@@ -391,9 +400,14 @@ const en: Record<TextKey, string> = {
   example_1:
     "Read the task, generate N ideas, score them and record them in project memory, pick by UCB, run experiments and submit the best",
   example_2:
-    "Contribute the project's new roles and loops to the library, with my review before it goes",
+    "A loop that writes the tests first, then the code, and is done when every test passes",
   example_3: "Create a role from my description",
   canvas_empty: "Nothing on the canvas yet. Say what you want on the left, or pick one here:",
+  loops_own: "This project's loops",
+  loops_own_none:
+    "This project has no loop of its own yet: say what you want in the chat on the left, and a close one is found or a new one built.",
+  loops_framework: "The framework's loops",
+  loops_library: "In the library",
   use_this: "Use this",
   definition: "Definition",
   close: "Close",
@@ -401,6 +415,7 @@ const en: Record<TextKey, string> = {
   kind_setup: "Setup",
   "kind_on-request": "On request",
   source_project: "Project",
+  source_framework: "Framework",
   source_library: "Library",
   check_ok: "Check passed",
   check_stale: "Script stale",

@@ -2,9 +2,9 @@ import { PencilLine, Plus, Search, Workflow } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { Overview, RoleDetail } from "../../../src/tools/studio-types.js";
 import { api } from "../api.js";
-import { useLang, type TextKey } from "../i18n.js";
+import { useLang } from "../i18n.js";
 import { Markdown } from "../Markdown.js";
-import { Badge, Button, cx } from "../ui.js";
+import { Badge, Button, cx, sourceKey } from "../ui.js";
 
 export function RolesPage({
   overview,
@@ -23,11 +23,18 @@ export function RolesPage({
   const { t } = useLang();
   const [needle, setNeedle] = useState("");
   const [role, setRole] = useState<RoleDetail | null>(null);
+  // The project's own roles first, then the framework's as installed, then the library's.
   const shown = useMemo(
     () =>
-      overview.roles.filter((entry) =>
-        `${entry.name} ${entry.description}`.toLowerCase().includes(needle.trim().toLowerCase()),
-      ),
+      overview.roles
+        .filter((entry) =>
+          `${entry.name} ${entry.description}`.toLowerCase().includes(needle.trim().toLowerCase()),
+        )
+        .sort(
+          (a, b) =>
+            Number(a.framework) - Number(b.framework) ||
+            Number(a.source === "library") - Number(b.source === "library"),
+        ),
     [overview.roles, needle],
   );
   const current = selected ?? shown[0]?.name ?? null;
@@ -73,7 +80,7 @@ export function RolesPage({
                   <span className="truncate font-mono text-[12.5px] font-semibold">
                     {entry.name}
                   </span>
-                  <Badge tone="outline">{t(`source_${entry.source}` as TextKey)}</Badge>
+                  <Badge tone="outline">{t(sourceKey(entry))}</Badge>
                 </div>
                 <p className="mt-0.5 line-clamp-2 text-xs leading-5 text-ink-3">
                   {entry.description}
@@ -88,7 +95,7 @@ export function RolesPage({
           <article className="mx-auto max-w-3xl">
             <h1 className="flex flex-wrap items-center gap-2 font-mono text-lg font-semibold">
               {role.name}
-              <Badge tone="outline">{t(`source_${role.source}` as TextKey)}</Badge>
+              <Badge tone="outline">{t(sourceKey(role))}</Badge>
               <Badge>{role.side}</Badge>
             </h1>
             <p className="mt-1 text-[13px] leading-6 text-ink-3">{role.description}</p>

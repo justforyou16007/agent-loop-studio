@@ -55,18 +55,123 @@ export function standaloneEnvironment(environment: NodeJS.ProcessEnv): NodeJS.Pr
   );
 }
 
+const isFile = (file: string): boolean => {
+  try {
+    return fs.statSync(file).isFile();
+  } catch {
+    return false;
+  }
+};
+/** The folders on a PATH, in order. */
+const pathDirs = (env: NodeJS.ProcessEnv, separator: string): string[] =>
+  (env.PATH ?? env.Path ?? "")
+    .split(separator)
+    .map((dir) => dir.trim().replace(/^"(.*)"$/, "$1"))
+    .filter(Boolean);
+/** A command as a Windows shell finds it: as named when it has a folder or an extension, else on PATH with PATHEXT's extensions. */
+function findOnPath(command: string, env: NodeJS.ProcessEnv): string | null {
+  const extensions = (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD")
+    .split(";")
+    .filter(Boolean)
+    .map((extension) => extension.toLowerCase());
+  const names = path.extname(command)
+    ? [command]
+    : extensions.map((extension) => command + extension);
+  const dirs = /[\\/]/.test(command) ? [""] : pathDirs(env, ";");
+  for (const dir of dirs)
+    for (const name of names) {
+      const file = dir ? path.join(dir, name) : name;
+      if (isFile(file)) return file;
+    }
+  return null;
+}
+/** What an npm shim (`claude.cmd`) starts: the script or program it names beside itself, other than the Node it may carry. */
+function shimTarget(shim: string): string | null {
+  const text = fs.readFileSync(shim, "utf8");
+  for (const [, named] of text.matchAll(/"%(?:~dp0|dp0%)\\?([^"]+?\.(?:[cm]?js|exe))"/gi)) {
+    if (/(^|[\\/])node\.exe$/i.test(named!)) continue;
+    const target = path.join(path.dirname(shim), ...named!.split(/[\\/]/));
+    if (isFile(target)) return target;
+  }
+  return null;
+}
+/** Git for Windows' bash: where Claude Code is told it is, beside git on PATH, or where its installer puts it; never WSL's. */
+function gitBash(env: NodeJS.ProcessEnv): string | null {
+  const candidates = [
+    env.CLAUDE_CODE_GIT_BASH_PATH,
+    ...pathDirs(env, ";")
+      .filter((dir) => isFile(path.join(dir, "git.exe")))
+      .flatMap((dir) => [
+        path.join(dir, "bash.exe"),
+        path.join(dir, "..", "bin", "bash.exe"),
+        path.join(dir, "..", "..", "bin", "bash.exe"),
+      ]),
+    ...["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"].map(
+      (name) => env[name] && path.join(env[name]!, "Git", "bin", "bash.exe"),
+    ),
+    env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, "Programs", "Git", "bin", "bash.exe"),
+  ];
+  return (
+    candidates.find(
+      (file): file is string =>
+        Boolean(file) && !/[\\/]system32[\\/]/i.test(file!) && isFile(file!),
+    ) ?? null
+  );
+}
+
+/**
+ * How a command starts on this machine without a shell reading its arguments,
+ * which carry the owner's words. Elsewhere than on Windows it starts as given.
+ * On Windows a program found on PATH starts only as an .exe or .com, so the
+ * command is looked up as a shell would: an .exe starts as it is; a script
+ * starts with this Node; an npm shim (`claude.cmd`) starts what it points at in
+ * the same way, never through cmd.exe, whose quoting the owner's words could
+ * break out of; and a command found none of these ways starts through Git Bash,
+ * which finds it as the owner's own Git Bash does.
+ */
+export function launchCommand(
+  argv: string[],
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): { file: string; args: string[]; env: Record<string, string> } {
+  const [command = "", ...args] = argv;
+  if (platform !== "win32" || !command) return { file: command, args, env: {} };
+  const found = findOnPath(command, env);
+  const target = found && /\.(cmd|bat)$/i.test(found) ? shimTarget(found) : found;
+  const extension = target ? path.extname(target).toLowerCase() : "";
+  if (target && (extension === ".exe" || extension === ".com"))
+    return { file: target, args, env: {} };
+  if (target && [".js", ".mjs", ".cjs"].includes(extension))
+    return { file: process.execPath, args: [target, ...args], env: {} };
+  const bash = gitBash(env);
+  if (bash)
+    return {
+      file: bash,
+      // `exec "$0" "$@"`: the command and each argument reach it whole, never read again by bash.
+      args: ["-lc", 'exec "$0" "$@"', command, ...args],
+      // The login shell stays in the project's folder, and passes the arguments on unconverted.
+      env: {
+        CHERE_INVOKING: "1",
+        MSYS_NO_PATHCONV: "1",
+        MSYS2_ARG_CONV_EXCL: "*",
+        MSYS: [env.MSYS, "noglob"].filter(Boolean).join(" "),
+      },
+    };
+  return { file: command, args, env: {} };
+}
+
 export function runClaude(
   argv: string[],
   cwd: string,
 ): Promise<{ ok: boolean; stdout: string; stderr: string }> {
-  const [command, ...args] = argv;
+  const launch = launchCommand(argv);
   return new Promise((resolve) => {
     execFile(
-      command!,
-      args,
+      launch.file,
+      launch.args,
       {
         cwd,
-        env: standaloneEnvironment(process.env),
+        env: { ...standaloneEnvironment(process.env), ...launch.env },
         timeout: 120_000,
         windowsHide: true,
         maxBuffer: 4 * 1024 * 1024,
@@ -75,7 +180,13 @@ export function runClaude(
         resolve({
           ok: !error,
           stdout: String(stdout),
-          stderr: String(stderr).trim() || (error ? error.message : ""),
+          stderr:
+            String(stderr).trim() ||
+            (!error
+              ? ""
+              : (error as NodeJS.ErrnoException).code === "ENOENT"
+                ? `Claude Code's command ${argv[0]} was not found on this machine: install Claude Code (on Windows with Git for Windows), or start the Studio with --claude <the path of claude.exe, or of Claude Code's cli.js>`
+                : error.message),
         }),
     );
   });
@@ -109,7 +220,8 @@ export async function listSessions(
   if (!reply.ok) throw new Error(`claude agents failed: ${reply.stderr}`);
   let parsed: unknown;
   try {
-    parsed = JSON.parse(reply.stdout);
+    // A login shell may print lines of its own first: the list starts on a line of its own.
+    parsed = JSON.parse(reply.stdout.slice(Math.max(0, reply.stdout.search(/^\s*\[/m))));
   } catch {
     throw new Error(`claude agents printed no JSON: ${reply.stdout.slice(0, 200)}`);
   }

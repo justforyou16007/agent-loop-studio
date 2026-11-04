@@ -130,6 +130,23 @@ else { process.stderr.write("not stood in for: " + command); process.exit(1); }
     // Not set up yet: the page opens it with its setup loop, the framework's.
     assert.equal(overview.project.setup_finished, null);
     assert.equal(overview.loops.find((loop: { name: string }) => loop.name === "setup").kind, "setup");
+    // The framework's loops and roles as installed are shown apart from the project's own; what an example gave is the project's.
+    const named = (list: { name: string; framework: boolean }[], name: string) => list.find((entry) => entry.name === name)!;
+    assert.equal(overview.project.example, "iterate-and-check");
+    assert.deepEqual([named(overview.loops, "setup").framework, named(overview.loops, "iterate-and-check").framework], [true, false]);
+    assert.deepEqual([named(overview.roles, "owner-review").framework, named(overview.roles, "planner").framework], [true, false]);
+    // A project started empty has none of its own, and opens blank; a framework role it changes becomes its own.
+    assert.equal((await request(at("api/projects/open"), { cookie, method: "POST", body: { name: "plain" } })).status, 200);
+    const empty = JSON.parse((await request(at("api/overview"), { cookie })).body);
+    assert.equal(empty.project.example, null);
+    assert.ok(empty.loops.filter((loop: { source: string }) => loop.source === "project").every((loop: { framework: boolean }) => loop.framework));
+    const baseRole = path.join(plain, ".claude/agents/owner-review.md");
+    const asInstalled = fs.readFileSync(baseRole, "utf8");
+    fs.writeFileSync(baseRole, `${asInstalled}\nThis project's own way.\n`);
+    const changedRole = JSON.parse((await request(at("api/overview"), { cookie })).body);
+    assert.equal(named(changedRole.roles, "owner-review").framework, false);
+    fs.writeFileSync(baseRole, asInstalled);
+    assert.equal((await request(at("api/projects/open"), { cookie, method: "POST", body: { name: "first" } })).status, 200);
     // A loop is tried with loop-trial; only a loop the project has can be.
     assert.equal((await request(at("api/trial"), { cookie, method: "POST", body: { name: "no-such-loop", goal: "" } })).status, 404);
     const flow = JSON.parse((await request(at("api/flow?name=iterate-and-check&source=project"), { cookie })).body);
@@ -229,6 +246,55 @@ else { process.stderr.write("not stood in for: " + command); process.exit(1); }
   };
   assert.match(describeRequest("loop-authoring", { name: "iterate-and-check", source: "project" }, "Add a review", []), /looking at the loop `iterate-and-check`.*unless they ask for another loop: Add a review/);
   assert.match(describeRequest("role-authoring", { name: "planner", source: "project" }, "Plan less", []), /^Change the existing role `planner`/);
+  // Claude Code's command on Windows, where a program on PATH starts only as an .exe: as a shell finds it, never through cmd.exe.
+  const { launchCommand } = (await import(pathToFileURL(path.join(source, "dist/tools/sessions.js")).href)) as {
+    launchCommand(argv: string[], platform?: string, env?: Record<string, string>): { file: string; args: string[]; env: Record<string, string> };
+  };
+  const windows = path.join(sandbox, "windows");
+  const npmBin = path.join(windows, "npm");
+  const npmScript = path.join(npmBin, "node_modules/@anthropic-ai/claude-code/cli.js");
+  fs.mkdirSync(path.dirname(npmScript), { recursive: true });
+  fs.writeFileSync(npmScript, "");
+  // What npm writes for a global command, and the sh script beside it that only a bash can run.
+  fs.writeFileSync(
+    path.join(npmBin, "claude.cmd"),
+    '@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js" %*\r\n',
+  );
+  fs.writeFileSync(path.join(npmBin, "claude"), "#!/bin/sh\n");
+  const onWindows = (env: Record<string, string>) => launchCommand(["claude", "agents", "--json"], "win32", env);
+  assert.deepEqual(onWindows({ PATH: npmBin, PATHEXT: ".COM;.EXE;.BAT;.CMD" }), { file: process.execPath, args: [npmScript, "agents", "--json"], env: {} }, "an npm shim runs its script with Node");
+  const exeBin = path.join(windows, "local-bin");
+  fs.mkdirSync(exeBin);
+  fs.writeFileSync(path.join(exeBin, "claude.exe"), "");
+  assert.deepEqual(onWindows({ PATH: `${exeBin};${npmBin}` }), { file: path.join(exeBin, "claude.exe"), args: ["agents", "--json"], env: {} }, "the first on PATH, as a shell finds it");
+  // A shim whose package brings its own program starts that program, not the Node it may carry.
+  const nativeBin = path.join(windows, "npm-native");
+  const nativeProgram = path.join(nativeBin, "node_modules/@anthropic-ai/claude-code/bin/claude.exe");
+  fs.mkdirSync(path.dirname(nativeProgram), { recursive: true });
+  fs.writeFileSync(nativeProgram, "");
+  fs.writeFileSync(path.join(nativeBin, "node.exe"), "");
+  fs.writeFileSync(path.join(nativeBin, "claude.cmd"), '@IF EXIST "%~dp0\\node.exe" (\r\n  "%~dp0\\node.exe" "%~dp0\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe" %*\r\n)\r\n');
+  assert.deepEqual(onWindows({ PATH: nativeBin }), { file: nativeProgram, args: ["agents", "--json"], env: {} });
+  // Named by its path, as --claude does.
+  assert.equal(launchCommand([npmScript, "agents"], "win32", {}).file, process.execPath);
+  assert.deepEqual(launchCommand([path.join(npmBin, "claude.cmd"), "agents"], "win32", {}).args, [npmScript, "agents"]);
+  // Found no such way: through Git Bash, each argument whole, staying in the project's folder and unconverted.
+  const bash = path.join(windows, "Git/bin/bash.exe");
+  fs.mkdirSync(path.dirname(bash), { recursive: true });
+  fs.writeFileSync(bash, "");
+  const viaBash = onWindows({ PATH: path.join(windows, "empty"), CLAUDE_CODE_GIT_BASH_PATH: bash });
+  assert.deepEqual([viaBash.file, viaBash.args], [bash, ["-lc", 'exec "$0" "$@"', "claude", "agents", "--json"]]);
+  assert.deepEqual([viaBash.env.CHERE_INVOKING, viaBash.env.MSYS_NO_PATHCONV], ["1", "1"]);
+  fs.mkdirSync(path.join(windows, "Git/cmd"));
+  fs.writeFileSync(path.join(windows, "Git/cmd/git.exe"), "");
+  assert.equal(onWindows({ PATH: path.join(windows, "Git/cmd") }).file, bash, "the bash beside git on PATH");
+  // WSL's bash runs Linux, not this machine's Claude Code.
+  const wsl = path.join(windows, "Windows/System32/bash.exe");
+  fs.mkdirSync(path.dirname(wsl), { recursive: true });
+  fs.writeFileSync(wsl, "");
+  assert.equal(onWindows({ PATH: path.join(windows, "empty"), CLAUDE_CODE_GIT_BASH_PATH: wsl }).file, "claude");
+  // Elsewhere a command starts as given.
+  assert.deepEqual(launchCommand(["claude", "agents"], "linux", {}), { file: "claude", args: ["agents"], env: {} });
 
   // --- the hooks: a trajectory recorded, an answer that is not the owner's refused ---
   const first = path.join(workspace, "first");

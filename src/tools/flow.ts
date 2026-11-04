@@ -30,6 +30,7 @@ export function summarize(loop: LoopView): LoopSummary {
   return {
     name: loop.name,
     source: loop.source,
+    framework: loop.framework,
     side: loop.side,
     kind: loop.kind,
     description: loop.description,
@@ -262,6 +263,7 @@ export function flowOf(view: ViewData, loop: LoopView): Flow {
     return {
       name,
       source: role?.source ?? "project",
+      framework: role?.framework ?? false,
       side: role?.side ?? "unknown",
       description: role?.description ?? "",
     };

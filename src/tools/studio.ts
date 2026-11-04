@@ -332,11 +332,13 @@ export async function serveStudio(
             library: data.project.library,
             chosen: data.project.chosen,
             setup_finished: data.project.setup_finished,
+            example: data.project.example,
           },
           loops: data.loops.map(summarize),
           roles: data.roles.map((role) => ({
             name: role.name,
             source: role.source,
+            framework: role.framework,
             side: role.side,
             description: role.description,
           })),

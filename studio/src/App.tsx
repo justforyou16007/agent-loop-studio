@@ -163,9 +163,12 @@ export function App() {
           setStatus(open);
         })
         .catch(() => undefined);
-      // A project not set up yet opens with its setup loop, which the framework gives every project.
+      // A project opens with its setup loop until it is set up, except one started empty in the
+      // Studio (the framework's own profile, no example): it opens blank, to be built in the chat,
+      // its setup run when the owner picks it.
       const setup = data.loops.find((loop) => loop.kind === "setup" && loop.source === "project");
-      if (!data.project.setup_finished && setup) {
+      const startedEmpty = data.project.side === "default" && !data.project.example;
+      if (!data.project.setup_finished && setup && !startedEmpty) {
         say({ from: "studio", key: "welcome_setup" });
         void open({ name: setup.name, source: "project" }, true);
         return;
@@ -174,7 +177,10 @@ export function App() {
       if (chosen && data.loops.some((loop) => loop.name === chosen && loop.source === "project")) {
         say({ from: "studio", key: "welcome_chosen", values: { loop: chosen } });
         void open({ name: chosen, source: "project" }, true);
+        return;
       }
+      if (startedEmpty && !data.loops.some((loop) => loop.source === "project" && !loop.framework))
+        say({ from: "studio", key: "welcome_empty" });
     });
   }, [load, say, open]);
   useEffect(() => {
@@ -201,20 +207,27 @@ export function App() {
     const waiting = say({ from: "studio", key: "searching", pending: true });
     try {
       const result = await api.search(text);
-      // Only the ones nearly as close as the closest: a weak match is noise beside a strong one.
-      const best = result.candidates[0]?.score ?? 0;
-      const close = result.candidates
+      // What the owner describes is a loop for their project: the framework's own loops (setup,
+      // trials, publishing) are not candidates. Only the ones nearly as close as the closest count:
+      // a weak match is noise beside a strong one.
+      const candidates = result.candidates.filter((candidate) => !candidate.framework);
+      const best = candidates[0]?.score ?? 0;
+      const close = candidates
         .filter((candidate) => candidate.score > 0 && candidate.score >= best * 0.4)
         .slice(0, 4);
-      const shown = close.length ? close : result.candidates.slice(0, 8);
+      // None is close: the authoring loop builds one from the owner's words, looking further first.
+      if (!close.length) {
+        replace(waiting, { from: "studio", key: "found_none_new" });
+        await change(text, []);
+        return;
+      }
       replace(waiting, {
         from: "studio",
-        key: close.length ? "found" : "found_none",
-        values: { n: shown.length },
-        candidates: shown,
+        key: "found",
+        values: { n: close.length },
+        candidates: close,
       });
-      const top = close[0];
-      if (top) await open({ name: top.name, source: top.source }, true);
+      await open({ name: close[0]!.name, source: close[0]!.source }, true);
     } catch (reason) {
       replace(waiting, { from: "studio", text: t("load_failed") + (reason as Error).message });
     } finally {
@@ -700,14 +713,20 @@ export function App() {
                         className="h-8 rounded-lg border border-line-strong bg-white px-2 text-[13px] text-ink-2"
                         title={t("pick_loop")}
                       >
-                        {overview.loops.map((loop) => (
-                          <option
-                            key={`${loop.source}:${loop.name}`}
-                            value={`${loop.source}:${loop.name}`}
-                          >
-                            {loop.name} · {t(`source_${loop.source}` as TextKey)}
-                          </option>
-                        ))}
+                        {loopGroups(overview.loops).map(([label, loops]) =>
+                          loops.length ? (
+                            <optgroup key={label} label={t(label)}>
+                              {loops.map((loop) => (
+                                <option
+                                  key={`${loop.source}:${loop.name}`}
+                                  value={`${loop.source}:${loop.name}`}
+                                >
+                                  {loop.name}
+                                </option>
+                              ))}
+                            </optgroup>
+                          ) : null,
+                        )}
                       </select>
                       <Button onClick={() => setDefinition(current)}>
                         <FileText size={14} /> {t("definition")}
@@ -906,6 +925,15 @@ function FocusBar({
   );
 }
 
+/** The project's own loops, the framework's as installed, and the library's the project lacks, apart. */
+function loopGroups(loops: Overview["loops"]): [TextKey, Overview["loops"]][] {
+  return [
+    ["loops_own", loops.filter((loop) => loop.source === "project" && !loop.framework)],
+    ["loops_framework", loops.filter((loop) => loop.framework)],
+    ["loops_library", loops.filter((loop) => loop.source === "library" && !loop.framework)],
+  ];
+}
+
 function EmptyCanvas({
   overview,
   onOpen,
@@ -918,33 +946,53 @@ function EmptyCanvas({
   const { t } = useLang();
   return (
     <div className="scroll-thin h-full overflow-y-auto px-8 py-8">
-      <p className="mb-4 text-sm text-ink-3">{t("canvas_empty")}</p>
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
-        {overview.loops.map((loop) => (
-          <div
-            key={`${loop.source}:${loop.name}`}
-            className="rounded-2xl border border-line bg-panel px-4 py-3 shadow-card"
-          >
-            <div className="font-mono text-[13px] font-semibold">{loop.name}</div>
-            <div className="mt-1">
-              <LoopBadges loop={loop} compact />
-            </div>
-            <p className="mt-1.5 line-clamp-3 text-xs leading-5 text-ink-3">{loop.description}</p>
-            <div className="mt-2 flex gap-1.5">
-              <Button size="sm" onClick={() => onPreview({ name: loop.name, source: loop.source })}>
-                <Eye size={13} /> {t("preview")}
-              </Button>
-              <Button
-                size="sm"
-                variant="primary"
-                onClick={() => onOpen({ name: loop.name, source: loop.source })}
-              >
-                <LayoutPanelLeft size={13} /> {t("open")}
-              </Button>
-            </div>
-          </div>
-        ))}
-      </div>
+      <p className="mb-5 text-sm text-ink-3">{t("canvas_empty")}</p>
+      {loopGroups(overview.loops).map(([label, loops]) =>
+        loops.length || label === "loops_own" ? (
+          <section key={label} className="mb-6">
+            <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-4">
+              {t(label)}
+            </h3>
+            {loops.length === 0 ? (
+              <p className="rounded-xl border border-dashed border-line-strong px-4 py-3 text-xs text-ink-3">
+                {t("loops_own_none")}
+              </p>
+            ) : (
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
+                {loops.map((loop) => (
+                  <div
+                    key={`${loop.source}:${loop.name}`}
+                    className="rounded-2xl border border-line bg-panel px-4 py-3 shadow-card"
+                  >
+                    <div className="font-mono text-[13px] font-semibold">{loop.name}</div>
+                    <div className="mt-1">
+                      <LoopBadges loop={loop} compact />
+                    </div>
+                    <p className="mt-1.5 line-clamp-3 text-xs leading-5 text-ink-3">
+                      {loop.description}
+                    </p>
+                    <div className="mt-2 flex gap-1.5">
+                      <Button
+                        size="sm"
+                        onClick={() => onPreview({ name: loop.name, source: loop.source })}
+                      >
+                        <Eye size={13} /> {t("preview")}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        onClick={() => onOpen({ name: loop.name, source: loop.source })}
+                      >
+                        <LayoutPanelLeft size={13} /> {t("open")}
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        ) : null,
+      )}
     </div>
   );
 }
