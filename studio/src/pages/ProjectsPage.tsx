@@ -7,7 +7,7 @@ import { useLang } from "../i18n.js";
 import { Badge, Button, cx } from "../ui.js";
 
 /** The workspace's projects: open, copy or delete one, start one from an example, or switch to another workspace. */
-export function ProjectsPage({ onOpened }: { onOpened: () => void }) {
+export function ProjectsPage({ onOpened }: { onOpened: (fresh?: boolean) => void }) {
   const { t, lang } = useLang();
   const [info, setInfo] = useState<ProjectsInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -29,12 +29,13 @@ export function ProjectsPage({ onOpened }: { onOpened: () => void }) {
   useEffect(() => {
     void load();
   }, []);
-  const act = async (work: () => Promise<unknown>) => {
+  /** A project opened, or (fresh) made in a new folder, which Claude Code has yet to trust. */
+  const act = async (work: () => Promise<unknown>, fresh = false) => {
     setBusy(true);
     setError(null);
     try {
       await work();
-      onOpened();
+      onOpened(fresh);
     } catch (reason) {
       setError(t("project_failed") + (reason as Error).message);
       void load();
@@ -150,7 +151,7 @@ export function ProjectsPage({ onOpened }: { onOpened: () => void }) {
                       size="sm"
                       variant="primary"
                       disabled={busy || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(copyName)}
-                      onClick={() => void act(() => api.copyProject(project.name, copyName))}
+                      onClick={() => void act(() => api.copyProject(project.name, copyName), true)}
                     >
                       <Copy size={12} /> {t("project_copy")}
                     </Button>
@@ -267,7 +268,7 @@ export function ProjectsPage({ onOpened }: { onOpened: () => void }) {
                 <Button
                   variant="primary"
                   disabled={busy || !valid}
-                  onClick={() => void act(() => api.newProject(name, reference))}
+                  onClick={() => void act(() => api.newProject(name, reference), true)}
                 >
                   <Plus size={14} /> {t("project_create")}
                 </Button>

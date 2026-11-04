@@ -121,6 +121,20 @@ const zh = {
   authoring_idle: "后台会话 {session} 停下了，但没有给出审核或结果。它最后说：",
   authoring_gone: "后台会话 {session} 已经不在了。",
   failed_start: "没能启动后台会话：",
+  trust_needed:
+    "Claude Code 还没有信任这个项目的文件夹，所以不能在这里启动后台会话。每个项目只需做一次：",
+  trust_new: "新项目要先在 Claude Code 里信任一次它的文件夹，流程才能在后台运行（每个项目一次）：",
+  trust_step_open: "在终端（比如 Git Bash）里进入项目文件夹：",
+  trust_step_run:
+    "运行 claude，在提示里选「Yes, I trust this folder」（默认选中的是「No, exit」，先移到 Yes 再回车），然后输入 /exit 退出。",
+  trust_step_retry: "回到这里点「重试」。",
+  trust_step_done: "回到这里，流程就能运行了。",
+  trust_copy_command: "复制命令",
+  trust_copy_folder: "只复制文件夹路径",
+  trust_copied: "已复制",
+  trust_why:
+    "每个项目都是独立的 git 仓库，Claude Code 的信任不会从上层文件夹带进仓库：信任工作区文件夹不够，要逐个项目信任。Studio 不替你做这一步，因为是否信任应该由你在 Claude Code 自己的提示里决定。",
+  retry: "重试",
   draft_badge: "草稿 · 等你批准",
   draft_hint: "这是按你的意见改出的草稿，还没有装进项目。",
   show_original: "看原流程",
@@ -352,6 +366,21 @@ const en: Record<TextKey, string> = {
   authoring_idle: "Session {session} stopped without a review or a result. Its last words:",
   authoring_gone: "Session {session} no longer exists.",
   failed_start: "Could not start the background session: ",
+  trust_needed:
+    "Claude Code does not trust this project's folder yet, so it cannot start background sessions here. Once per project:",
+  trust_new:
+    "Before loops can run in the background, Claude Code has to be told once to trust the new project's folder:",
+  trust_step_open: "In a terminal (Git Bash, say), go to the project's folder:",
+  trust_step_run:
+    "Run claude and choose \u201cYes, I trust this folder\u201d at its prompt (it starts on \u201cNo, exit\u201d: move to Yes, then press Enter), then type /exit.",
+  trust_step_retry: "Come back and press Try again.",
+  trust_step_done: "Come back: loops can then run.",
+  trust_copy_command: "Copy the command",
+  trust_copy_folder: "Copy only the folder's path",
+  trust_copied: "Copied",
+  trust_why:
+    "Each project is its own git repository, and Claude Code does not carry trust into a repository from the folders above it: trusting the workspace folder is not enough, each project is trusted once. The Studio does not do it for you: whether to trust a folder is yours to decide, at Claude Code's own prompt.",
+  retry: "Try again",
   draft_badge: "Draft · waiting for you",
   draft_hint: "Drafted from your words; not installed in the project yet.",
   show_original: "Show the original",

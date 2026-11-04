@@ -40,7 +40,7 @@ import type {
   ProjectsInfo,
   RoleDetail,
 } from "./studio-types.js";
-import { isRecord } from "./validate.js";
+import { A1Error, isRecord } from "./validate.js";
 
 const ASSETS = fileURLToPath(new URL("../studio/", import.meta.url));
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1"]);
@@ -640,7 +640,11 @@ export async function serveStudio(
         await api(request, url, head, response);
       } catch (error) {
         cache = null;
-        json(response, 500, { error: (error as Error).message }, head);
+        // The helpers' code goes along, so the page can say what to do (a folder Claude Code does not trust yet, say).
+        const coded =
+          error instanceof A1Error ? { code: error.code, location: error.location } : {};
+        const status = coded.code === "WORKSPACE_NOT_TRUSTED" ? 409 : 500;
+        json(response, status, { error: (error as Error).message, ...coded }, head);
       }
       return;
     }

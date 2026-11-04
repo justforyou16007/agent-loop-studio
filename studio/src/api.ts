@@ -49,11 +49,17 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     window.location.reload();
     throw new Error("signed out");
   }
-  const reply = (await response.json().catch(() => ({}))) as T & { error?: string };
+  const reply = (await response.json().catch(() => ({}))) as T & {
+    error?: string;
+    code?: string;
+    location?: string | null;
+  };
   if (!response.ok) {
-    // A project closed elsewhere answers 409: the page goes back to the projects.
+    // The helper's code says what stood in the way (a folder Claude Code does not trust yet, say), and where.
     throw Object.assign(new Error(readable(reply.error ?? `HTTP ${response.status}`)), {
       status: response.status,
+      code: reply.code,
+      location: reply.location ?? undefined,
     });
   }
   return reply;

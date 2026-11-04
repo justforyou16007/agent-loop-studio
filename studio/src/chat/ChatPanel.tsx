@@ -4,6 +4,8 @@ import {
   AtSign,
   Box,
   Check,
+  Copy,
+  RotateCcw,
   Eye,
   LayoutPanelLeft,
   Loader2,
@@ -455,6 +457,7 @@ function Message({
             />
           </div>
         )}
+        {message.trust && <TrustCard folder={message.trust.folder} onRetry={message.retry} />}
         {message.files && message.files.length > 0 && (
           <Button size="sm" onClick={() => onViewFiles(message.files!)}>
             <Eye size={13} /> {t("view_role_draft")}
@@ -606,5 +609,66 @@ function Sentence({
         ),
       )}
     </>
+  );
+}
+
+/** A shell's own words for a folder: in single quotes, a quote inside written as '\''. */
+const quoted = (folder: string): string => `'${folder.replace(/'/g, "'\\''")}'`;
+
+/**
+ * What to do once for a project whose folder Claude Code does not trust yet: the
+ * owner trusts it at Claude Code's own prompt, in a terminal there; the Studio
+ * never does it for them.
+ */
+function TrustCard({ folder, onRetry }: { folder: string; onRetry?: () => void }) {
+  const { t } = useLang();
+  const [copied, setCopied] = useState<"folder" | "command" | null>(null);
+  const command = `cd ${quoted(folder)} && claude`;
+  const copy = async (what: "folder" | "command", text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(what);
+      setTimeout(() => setCopied((now) => (now === what ? null : now)), 1600);
+    } catch {
+      // The page may not reach the clipboard: the path and command stay selectable.
+    }
+  };
+  return (
+    <div className="rounded-xl border border-wait-500/40 bg-wait-50/60 px-3 py-2.5 text-[12.5px] leading-5 text-ink-2">
+      <ol className="list-decimal space-y-1.5 pl-4">
+        <li>
+          {t("trust_step_open")}
+          <div className="mt-1 flex items-start gap-1.5">
+            <code
+              title={folder}
+              className="min-w-0 flex-1 select-all break-all rounded-md bg-white px-1.5 py-0.5 font-mono text-[11.5px] text-ink"
+            >
+              {command}
+            </code>
+            <Button size="sm" onClick={() => void copy("command", command)}>
+              <Copy size={12} />{" "}
+              {copied === "command" ? t("trust_copied") : t("trust_copy_command")}
+            </Button>
+          </div>
+          <button
+            type="button"
+            onClick={() => void copy("folder", folder)}
+            className="mt-0.5 text-[11px] text-ink-4 underline-offset-2 hover:text-ink-2 hover:underline"
+          >
+            {copied === "folder" ? t("trust_copied") : t("trust_copy_folder")}
+          </button>
+        </li>
+        <li>{t("trust_step_run")}</li>
+        <li>{t(onRetry ? "trust_step_retry" : "trust_step_done")}</li>
+      </ol>
+      {onRetry && (
+        <div className="mt-2">
+          <Button size="sm" variant="primary" onClick={onRetry}>
+            <RotateCcw size={12} /> {t("retry")}
+          </Button>
+        </div>
+      )}
+      <p className="mt-2 text-[11px] leading-4 text-ink-4">{t("trust_why")}</p>
+    </div>
   );
 }

@@ -92,6 +92,8 @@ try {
 const [command, ...rest] = process.argv.slice(2);
 if (command === "agents") process.stdout.write(fs.readFileSync(${JSON.stringify(agentsFile)}, "utf8"));
 else if (command === "stop") fs.appendFileSync(${JSON.stringify(stoppedFile)}, rest[0] + "\\n");
+// What Claude Code says when it is asked for a background session in a folder nobody told it to trust.
+else if (command === "--bg") { process.stderr.write("Workspace not trusted. Run \`claude\` in " + process.cwd() + " once and accept the trust prompt, then retry.\\n"); process.exit(1); }
 else { process.stderr.write("not stood in for: " + command); process.exit(1); }
 `,
   );
@@ -235,6 +237,16 @@ else { process.stderr.write("not stood in for: " + command); process.exit(1); }
     assert.equal((await request(at("api/run"), { cookie, method: "POST", body: { name: "setup" } })).status, 409);
     assert.equal(JSON.parse((await request(at("api/projects"), { cookie })).body).current, null);
     fs.renameSync(`${record}.away`, record);
+
+    // A folder Claude Code does not trust yet: the run does not start, and the page is told which folder to trust.
+    assert.equal((await request(at("api/projects/open"), { cookie, method: "POST", body: { name: "first" } })).status, 200);
+    const untrusted = await request(at("api/run"), { cookie, method: "POST", body: { name: "setup" } });
+    assert.equal(untrusted.status, 409, untrusted.body);
+    const refusal = JSON.parse(untrusted.body);
+    assert.deepEqual([refusal.code, refusal.location], ["WORKSPACE_NOT_TRUSTED", first]);
+    assert.match(refusal.error, /Yes, I trust this folder/);
+    const store = path.join(first, ".contrejour/studio/conversations.json");
+    assert.equal(fs.existsSync(store) ? read(store).conversations.length : 0, 0, "no conversation is recorded for a session that never started");
   } finally {
     await studio.close();
   }

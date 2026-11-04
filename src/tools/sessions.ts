@@ -301,13 +301,33 @@ export const resumeArgv = (
   message: string,
 ): string[] => [...options.claude_command, "--bg", "--resume", session.session_id, message];
 
+/**
+ * Claude Code starts a background session only in a folder the owner told it to
+ * trust, in an interactive `claude` there. Trust is kept per git repository and
+ * never reaches into one from the folders above it, and every project is its own
+ * repository: each project is trusted once. The framework never records trust
+ * itself: the owner decides it, at Claude Code's own prompt.
+ */
+export function refusedUntrusted(root: string, reply: { stdout: string; stderr: string }): void {
+  const said = `${reply.stderr}\n${reply.stdout}`;
+  if (!/workspace not trusted/i.test(said)) return;
+  failA1(
+    "WORKSPACE_NOT_TRUSTED",
+    `Claude Code does not trust the folder ${path.resolve(root)} yet, and starts background sessions only in a folder it trusts: open a terminal in that folder, run claude, choose "Yes, I trust this folder", type /exit, then try again (Claude Code said: ${said.trim().split(/\r?\n/)[0]})`,
+    path.resolve(root),
+  );
+}
+
 export async function startSession(
   options: SessionOptions,
   root: string,
   request: StartRequest,
 ): Promise<BackgroundSession> {
   const reply = await runClaude(startArgv(options, request), root);
-  if (!reply.ok) throw new Error(`claude --bg failed: ${reply.stderr || reply.stdout}`);
+  if (!reply.ok) {
+    refusedUntrusted(root, reply);
+    throw new Error(`claude --bg failed: ${reply.stderr || reply.stdout}`);
+  }
   return findSession(options, root, backgroundedId(reply.stdout), request.name);
 }
 
@@ -337,7 +357,10 @@ export function sessionControl(options: SessionOptions, root: string): SessionCo
         if (!stopped.ok) throw new Error(`claude stop failed: ${stopped.stderr}`);
       }
       const reply = await runClaude(resumeArgv(options, session, message), root);
-      if (!reply.ok) throw new Error(`claude --resume failed: ${reply.stderr || reply.stdout}`);
+      if (!reply.ok) {
+        refusedUntrusted(root, reply);
+        throw new Error(`claude --resume failed: ${reply.stderr || reply.stdout}`);
+      }
       const id = backgroundedId(reply.stdout);
       return id && id !== session.id ? await findSession(options, root, id, session.name) : session;
     },
