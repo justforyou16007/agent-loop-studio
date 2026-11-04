@@ -88,10 +88,14 @@ const zh = {
   reset: "恢复默认",
   invalid: "不在允许范围内",
   run_button: "运行",
+  trial_button: "试运行",
+  trial_hint: "先静态检查，再真跑一小轮，请你判断是否符合目标，不符合就优化后再试",
   run_title: "在后台运行 {loop}？",
   run_body:
     "它会在一个后台 Claude Code 会话里，以任务管理角色的身份无人值守地运行，可能持续很久，也会消耗不少用量。流程停下等你决定时，会在对话里请你回复；用对话里给出的会话编号运行 claude attach 可以实时查看。",
   run_launched: "已在后台开始运行 {loop}（会话 {session}），画布上会标出正在进行和已经完成的步骤。",
+  trial_launched:
+    "已在后台开始试运行 {loop}（会话 {session}）：先静态检查，再真跑一小轮，然后把它做了什么拿来请你判断是否符合你的目标；不符合的地方会先改好再试。",
   role_edit: "在对话中修改",
   role_new_button: "新建角色",
   role_target: "接下来在对话里说的话，会用来修改角色 {role}。",
@@ -259,11 +263,16 @@ const en: Record<TextKey, string> = {
   reset: "Default",
   invalid: "out of range",
   run_button: "Run",
+  trial_button: "Trial",
+  trial_hint:
+    "Static check, then a small real run you judge against your goal; improved and tried again until it fits",
   run_title: "Run {loop} in the background?",
   run_body:
     "It runs unattended in a background Claude Code session, as the task manager; it may take long and use a fair amount of your usage. When the loop stops for your decision, the chat asks you; claude attach with the session id in the chat follows it live.",
   run_launched:
     "Running {loop} in the background (session {session}); the canvas marks the steps going on and done.",
+  trial_launched:
+    "Trial of {loop} started in the background (session {session}): a static check, then one small real run, whose work you then judge against your goal; what does not fit is improved before the next trial.",
   role_edit: "Change it in the chat",
   role_new_button: "New role",
   role_target: "What you say next in the chat changes the role {role}.",

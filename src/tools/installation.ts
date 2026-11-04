@@ -88,6 +88,20 @@ export function libraryRoots(root: string): string[] {
   ].filter((candidate) => fs.existsSync(path.join(candidate, "library")));
 }
 
+/**
+ * The libraries to look in for a loop or role of a side, the one whose version a
+ * project gets first: for a side's own, the checkout the project came from, then
+ * the community's; for one any project can use (`framework`), the community's,
+ * whose version of a framework loop or role takes the framework's place, then the
+ * framework's.
+ */
+export function librariesFor(root: string, side: string): string[] {
+  const roots = libraryRoots(root);
+  const community = roots.filter((library) => path.basename(library) === "agent-loop-community");
+  const others = roots.filter((library) => !community.includes(library));
+  return side === "framework" ? [...community, ...others.reverse()] : [...others, ...community];
+}
+
 export function skillsDir(root: string): string {
   return path.join(path.resolve(root), ...SKILLS_DIR.split("/"));
 }

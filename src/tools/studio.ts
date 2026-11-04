@@ -27,6 +27,7 @@ import {
   startConversation,
   type AuthoringLoop,
   type Pointer,
+  trialLoop,
 } from "./studio-authoring.js";
 import type { LoopDetail, Overview, RoleDetail } from "./studio-types.js";
 import { isRecord } from "./validate.js";
@@ -192,6 +193,21 @@ export async function serveStudio(
     // Everything else is about the project open now.
     if (!root) return json(response, 409, { error: "open or create a project first" }, head);
     if (url.pathname.startsWith("/api/authoring")) return authoring(request, url, head, response);
+    if (url.pathname === "/api/trial") {
+      if (request.method !== "POST") return json(response, 405, { error: "POST only" });
+      const body = await readBody(request);
+      const name = typeof body.name === "string" ? body.name : "";
+      const goal = typeof body.goal === "string" ? body.goal : "";
+      const loops = (await view()).loops.filter((loop) => loop.source === "project");
+      if (!loops.some((loop) => loop.name === name))
+        return json(response, 404, { error: `this project has no loop ${name}` });
+      if (!loops.some((loop) => loop.name === "loop-trial"))
+        return json(response, 409, {
+          error: "this project has no loop-trial loop: update its installation",
+        });
+      const conversation = await trialLoop(root, sessionOptions, name, goal);
+      return json(response, 200, { id: conversation.id, session: conversation.session.id });
+    }
     if (url.pathname === "/api/use" || url.pathname === "/api/run") {
       if (request.method !== "POST") return json(response, 405, { error: "POST only" });
       const body = await readBody(request);

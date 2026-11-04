@@ -467,6 +467,19 @@ export async function checkLoop(root: string, name: string): Promise<LoopReport>
       defects.push("check-args must be one line of JSON: a list of argument objects");
     }
   }
+  // What a trial run of the loop passes it (loop-trial): one argument object whose run stays in the project.
+  if (fields["trial-args"]) {
+    try {
+      const parsed: unknown = JSON.parse(fields["trial-args"]);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
+    } catch {
+      defects.push("trial-args must be one line of JSON: one argument object");
+    }
+  }
+  // A loop that runs a loop it is given names the argument that gives it.
+  const childLoopArg = fields["child-loop-arg"];
+  if (childLoopArg !== undefined && !/^[A-Za-z_]\w*$/.test(childLoopArg))
+    defects.push("child-loop-arg must name one argument, such as loop");
   // A run gets the parameters' defaults as args.params, as a project records the values chosen.
   let parameters: LoopParameter[] = [];
   try {
@@ -506,9 +519,11 @@ export async function checkLoop(root: string, name: string): Promise<LoopReport>
     [...body.matchAll(/agentType\s*:\s*(['"`])([^'"`]+)\1/g)].map((match) => match[2]!),
   );
   for (const role of named) if (!roles.includes(role)) defects.push(`unknown role "${role}"`);
-  // A child loop is named, so the check and a reader can tell which loops a loop runs.
+  // A child loop is named, so the check and a reader can tell which loops a loop runs; a loop that runs
+  // the loop it is given says which argument gives it (`child-loop-arg`), and the check runs the one
+  // its check-args name.
   const loopNames = listLoops(root);
-  if (/\bworkflow\s*\(\s*(?!['"`])/.test(body))
+  if (/\bworkflow\s*\(\s*(?!['"`])/.test(body) && !childLoopArg)
     defects.push("a child loop must be named by a string");
   for (const match of body.matchAll(/\bworkflow\s*\(\s*(['"`])([^'"`]+)\1/g))
     if (!loopNames.includes(match[2]!)) defects.push(`unknown loop "${match[2]}"`);

@@ -29,9 +29,16 @@ const sides = fs.existsSync(path.join(library, "loops"))
       .map((entry) => entry.name)
   : [];
 
+// The library's loops, and the reference projects' (references/<name>/loops/), which new projects start from.
+const references = path.join(root, "references");
+const loopDirs = [
+  ...sides.map((side) => path.join(library, "loops", side)),
+  ...(fs.existsSync(references)
+    ? fs.readdirSync(references).map((name) => path.join(references, name, "loops"))
+    : []),
+];
 if (stamp)
-  for (const side of sides) {
-    const dir = path.join(library, "loops", side);
+  for (const dir of loopDirs) {
     for (const definition of files(dir, ".md")) {
       const script = path.join(dir, definition.replace(/\.md$/, ".js"));
       if (!fs.existsSync(script)) continue;

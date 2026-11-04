@@ -5,6 +5,7 @@ import {
   History,
   Languages,
   LayoutPanelLeft,
+  FlaskConical,
   Play,
   RefreshCw,
   SlidersHorizontal,
@@ -370,6 +371,24 @@ export function App() {
       say({ from: "studio", text: t("failed_start") + (reason as Error).message });
     }
   };
+  /** The loop on the canvas, tried the way it will run: loop-trial asks in the chat whether it serves the goal. */
+  const tryIt = async () => {
+    if (!flow) return;
+    try {
+      const started = await api.trial(flow.loop.name, "");
+      setConversation(started.id);
+      setStatus(null);
+      handled.current = "";
+      pendingMessage.current = say({
+        from: "studio",
+        key: "trial_launched",
+        values: { loop: flow.loop.name, session: started.session },
+        pending: true,
+      });
+    } catch (reason) {
+      say({ from: "studio", text: t("failed_start") + (reason as Error).message });
+    }
+  };
   const editRole = (name: string | null, source = "project") => {
     setRoleTarget({ name, source });
     setPage("compose");
@@ -561,6 +580,17 @@ export function App() {
                           <Play size={14} /> {t("run_button")}
                         </Button>
                       )}
+                      {flow.loop.source === "project" &&
+                        flow.loop.kind !== "setup" &&
+                        flow.loop.name !== "loop-trial" && (
+                          <Button
+                            onClick={() => void tryIt()}
+                            disabled={status?.state === "running"}
+                            title={t("trial_hint")}
+                          >
+                            <FlaskConical size={14} /> {t("trial_button")}
+                          </Button>
+                        )}
                       <Button
                         variant="primary"
                         disabled={flow.loop.kind !== "task"}

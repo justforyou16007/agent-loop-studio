@@ -1,13 +1,12 @@
 export const meta = {
   name: "library-contribution",
   description:
-    "Share the loops and roles this project made with other projects through the community library: a plan, the project's own check when it has one, the owner's review of exactly that plan, then the pull request",
+    "Contribute the loops and roles the owner chooses to the community library: a plan, the project's own check when it has one, the owner's review of exactly that plan, then the pull request",
   whenToUse:
     "When the owner asks, once a task has finished. Run with {}, then again with the owner's replies in answers.",
   phases: [{ title: "Plan" }, { title: "Own check" }, { title: "Review" }, { title: "Contribute" }],
 };
 
-const PURPOSE = "share";
 const STRINGS = { type: "array", items: { type: "string" } };
 const PLAN = {
   type: "object",
@@ -149,7 +148,7 @@ let notes = "";
 for (let attempt = 1; attempt <= 6; attempt += 1) {
   // Step 1
   phase("Plan");
-  const plan = await agent(JSON.stringify({ action: "plan", purpose: PURPOSE, exclude, notes }), {
+  const plan = await agent(JSON.stringify({ action: "plan", exclude, notes }), {
     agentType: "library-contributor",
     schema: PLAN,
     phase: "Plan",
@@ -163,14 +162,14 @@ for (let attempt = 1; attempt <= 6; attempt += 1) {
     const decided = await review(id, {
       subject: "a checkout of the community library",
       request:
-        "This project has no checkout of the community library, which sharing needs. Fetch one from the address below?",
+        "This project has no checkout of the community library, which a contribution needs. Fetch one from the address below?",
       materials: { upstream: plan.upstream, reason: plan.reason },
       approvable: true,
     });
     if (decided.decision === "ask") return waiting(id, decided);
     if (decided.decision !== "approve")
       return { contributed: false, reason: "the owner did not have a checkout fetched" };
-    const cloned = await agent(JSON.stringify({ action: "clone", purpose: PURPOSE }), {
+    const cloned = await agent(JSON.stringify({ action: "clone" }), {
       agentType: "library-contributor",
       schema: CLONED,
       phase: "Plan",
@@ -199,7 +198,7 @@ for (let attempt = 1; attempt <= 6; attempt += 1) {
   const decided = await review(id, {
     subject: "a contribution to the community library",
     request:
-      "Approve sharing exactly these loops and roles with other projects through the community library, as a pull request, or say what to leave out or change.",
+      "Choose what goes to the community library: approve contributing exactly these loops and roles as a pull request, or say what to leave out or put back.",
     materials: {
       units: plan.units,
       not_selected: plan.not_selected,
@@ -216,7 +215,7 @@ for (let attempt = 1; attempt <= 6; attempt += 1) {
     // Step 5
     phase("Contribute");
     const sent = await agent(
-      JSON.stringify({ action: "contribute", purpose: PURPOSE, digest: plan.digest, exclude }),
+      JSON.stringify({ action: "contribute", digest: plan.digest, exclude }),
       {
         agentType: "library-contributor",
         schema: SENT,
@@ -229,4 +228,4 @@ for (let attempt = 1; attempt <= 6; attempt += 1) {
 }
 return { contributed: false, reason: "no plan was approved within 6 rounds" };
 
-// contrejour-loop-definition-sha256: f1b2d4c7dd37f062ddb49c82b18baf1b3ac46eedf84a9c277681748d9ccd7e76
+// contrejour-loop-definition-sha256: e3587f1883ebaae415d33a42fe87ea619e8fc1c1aeb4669b563297332ea9142e

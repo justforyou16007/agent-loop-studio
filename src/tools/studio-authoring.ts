@@ -126,6 +126,27 @@ export function runLoop(
   });
 }
 
+/**
+ * Try a loop the way it will run: the loop-trial loop checks it statically, runs it
+ * for real on a small scale and asks the owner, in the chat, whether what it did
+ * serves their goal, improving it between trials.
+ */
+export function trialLoop(
+  projectRoot: string,
+  options: SessionOptions,
+  loop: string,
+  goal: string,
+): Promise<Conversation> {
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(loop))
+    throw new Error("a loop name is lowercase words joined by hyphens");
+  return begin(projectRoot, options, {
+    purpose: "run",
+    loop: "loop-trial",
+    base: { name: loop, source: "project" },
+    prompt: `Run the loop-trial loop with args ${JSON.stringify({ loop, goal })}.`,
+  });
+}
+
 async function begin(
   projectRoot: string,
   options: SessionOptions,

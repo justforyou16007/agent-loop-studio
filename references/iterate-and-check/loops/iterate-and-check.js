@@ -37,8 +37,8 @@ const BUILT = {
 };
 const CHECKED = {
   type: "object",
-  properties: { passed: { type: "boolean" }, findings: STRINGS },
-  required: ["passed", "findings"],
+  properties: { passed: { type: "boolean" }, findings: STRINGS, digest: { type: "string" } },
+  required: ["passed", "findings", "digest"],
 };
 const RECORDED = {
   type: "object",
@@ -102,13 +102,15 @@ for (let reviews = 1; reviews <= 3; reviews += 1) {
       built: built.built,
       passed: checked.passed,
       findings: checked.findings,
+      digest: checked.digest,
     };
     findings = checked.findings;
     if (checked.passed) break;
   }
   // Step 5
   phase("Review");
-  const id = `result:${reviews}`;
+  // The review names the version it is of, so a later run never takes an answer meant for this one.
+  const id = `result:${last.digest}`;
   const decided = await agent(
     JSON.stringify({
       review_id: id,
@@ -133,4 +135,4 @@ for (let reviews = 1; reviews <= 3; reviews += 1) {
 }
 return { done: false, reason: "no result was approved within 3 reviews", ...last };
 
-// contrejour-loop-definition-sha256: 6cd63285fa56b8eacb1958b5176aac223c9fad5d91fef99abc62bf34c086b00f
+// contrejour-loop-definition-sha256: f92f571eb35821f611c1115934ebb66b1f4fbd4905221e104fe476a1dae373a3

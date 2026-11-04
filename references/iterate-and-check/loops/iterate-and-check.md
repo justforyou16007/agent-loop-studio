@@ -5,6 +5,7 @@ side: framework
 kind: task
 triggers: record-trajectory, guard-owner-answers
 check-args: [{}]
+trial-args: {"params": {"max_rounds": 1}}
 ---
 
 # Iterate and check
@@ -24,7 +25,7 @@ A general way to work on the task the owner wrote in `task.md`: plan, build, che
 2. **Build** — `builder` carries out the plan (`{action: "build", plan}`) and reports what it made and where.
 3. **Check** — `checker` checks what was built against the criteria (`{action: "check", plan, criteria, built, files}`): whether it passed, with its findings.
 4. **Record** — `project-memory` records the round (`{action: "record", what, outcome, evidence}`): what worked, or what failed and why. When the check failed and rounds are left, the loop goes back to step 1 with the findings.
-5. **Review** — `owner-review` shows the owner the result (`review_id` `result:<round>`). Approval ends the loop with the result; `revise` goes back to step 1 with the owner's words as findings; `cancel` ends the loop.
+5. **Review** — `owner-review` shows the owner the result (`review_id` `result:<digest>`, the checker's digest of what it checked). Approval ends the loop with the result; `revise` goes back to step 1 with the owner's words as findings; `cancel` ends the loop.
 
 ## Bounds
 

@@ -1,15 +1,10 @@
 export const meta = {
   name: "setup",
   description:
-    "Set this project up: what is particular to it (configure), the task loop with its parameter values, a check of its loops, the hand-off",
+    "Set up this project's workflow: the owner's goal, the task loop with its parameter values, a check of the loops, the hand-off",
   whenToUse:
-    'When the project is not set up yet, or the owner wants to set it up again. Run it with {"requirement": "<the owner\'s words, or start>"}, then again with the owner\'s replies in answers.',
-  phases: [
-    { title: "Configure" },
-    { title: "Task loop" },
-    { title: "Check" },
-    { title: "Hand off" },
-  ],
+    'When the project is not set up yet, or the owner wants its workflow set up again. Run it with {"goal": "<the owner\'s words, or start>"}, then again with the owner\'s replies in answers.',
+  phases: [{ title: "Goal" }, { title: "Task loop" }, { title: "Check" }, { title: "Hand off" }],
 };
 
 const STRINGS = { type: "array", items: { type: "string" } };
@@ -23,6 +18,15 @@ const REVIEW = {
     accepted: STRINGS,
   },
   required: ["decision", "question", "document", "notes", "accepted"],
+};
+const GOAL = {
+  type: "object",
+  properties: {
+    needs_owner: { type: "boolean" },
+    goal: { type: "string" },
+    request: { type: "string" },
+  },
+  required: ["needs_owner", "goal", "request"],
 };
 const FOUND = {
   type: "object",
@@ -92,16 +96,38 @@ const waiting = (id, decided) => ({
 });
 const stopped = { done: false, reason: "the owner stopped the setup" };
 
-// Step 1: what is particular to this project, in the loop its side gives it.
-phase("Configure");
-const configured = await workflow("configure", { requirement: input.requirement ?? "", answers });
-if (configured && configured.waiting) return configured;
-if (!configured || !configured.done)
+// Step 1: what the owner wants the project's work to be.
+phase("Goal");
+let goalNotes = "";
+let read = null;
+for (let round = 1; round <= 3; round += 1) {
+  read = await agent(JSON.stringify({ action: "goal", goal: input.goal ?? "", notes: goalNotes }), {
+    agentType: "project-setup",
+    schema: GOAL,
+    phase: "Goal",
+  });
+  if (!read.needs_owner) break;
+  const id = `goal:${round}`;
+  const decided = await review(
+    id,
+    {
+      subject: "what this project's workflow should do",
+      request: read.request,
+      materials: { goal: input.goal ?? "", earlier_answers: goalNotes },
+      approvable: false,
+    },
+    "Goal",
+  );
+  if (decided.decision === "ask") return waiting(id, decided);
+  if (decided.decision === "cancel") return stopped;
+  goalNotes = [goalNotes, decided.notes].filter(Boolean).join("\n");
+}
+if (read.needs_owner)
   return {
     done: false,
-    reason: (configured && configured.reason) || "the project's configuration did not finish",
+    reason: "what the workflow should do is still not clear enough to choose one",
   };
-const requirement = configured.requirement || input.requirement || "";
+const goal = read.goal;
 
 // Step 2
 phase("Task loop");
@@ -109,17 +135,18 @@ let notes = "";
 let chosen = null;
 let built = 0;
 for (let round = 1; round <= 6 && !chosen; round += 1) {
-  const found = await agent(JSON.stringify({ action: "find-task-loop", requirement, notes }), {
+  const found = await agent(JSON.stringify({ action: "find-task-loop", goal, notes }), {
     agentType: "loop-query",
     schema: FOUND,
     phase: "Task loop",
   });
   const proposal = await agent(
-    JSON.stringify({ action: "propose", candidates: found.candidates, notes }),
+    JSON.stringify({ action: "propose", goal, candidates: found.candidates, notes }),
     { agentType: "project-setup", schema: PROPOSAL, phase: "Task loop" },
   );
   if (proposal.build) {
-    if (built >= 2) return { done: false, reason: "no task loop was settled after building two" };
+    if (built >= 2)
+      return { done: false, reason: "no task loop was settled after two were built or changed" };
     built += 1;
     const authored = await workflow("loop-authoring", {
       description: proposal.description,
@@ -185,7 +212,7 @@ phase("Hand off");
 const handoff = await agent(
   JSON.stringify({
     action: "handoff",
-    configured: configured.report || "",
+    goal,
     loop: chosen.loop,
     params: chosen.params,
     check: checked,
@@ -194,4 +221,4 @@ const handoff = await agent(
 );
 return { done: true, loop: chosen.loop, report: handoff.report };
 
-// contrejour-loop-definition-sha256: 1ee1c3dad676e5004e12ad93405d3edb5e8d0e704fdcf39e702ce520d3b56d0a
+// contrejour-loop-definition-sha256: 220e507a2bfd109ef5060f9f0312b76af7ac53b328cb5afb8d4fd4792e155a0b

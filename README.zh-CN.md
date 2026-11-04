@@ -5,7 +5,7 @@
 框架负责创建、复用和优化流程与角色：
 
 - **Studio**：owner 在本机浏览器里用的控制台。在对话框里说想要什么，它马上列出相近的流程，每个都能预览流程图，并把最接近的画到画布上，超参数排在旁边、用虚线连到它们影响的步骤。点步骤或箭头、说要怎么改，`loop-authoring` 就在后台 Claude Code 会话里起草修改，改好后停下请你审核，草稿画在画布上。在这里还可以选定项目的主任务流程和超参数、运行任意流程并看着它一步步执行、在对话里修改角色，以及管理工作区里的多个项目：从参考项目新建，或复制已有项目。
-- **基础角色和流程**：`setup`（以及 `project-setup`），每个项目都有，Studio 打开新项目时默认加载它：先做项目自己的配置（`configure` 这一步，项目包可以换成自己的），再选定主任务流程和参数，检查后交接；`loop-authoring`、`role-authoring`（以及 `loop-query`、`loop-editor`、`role-creator`），`owner-review`；`trajectory-optimizer` 根据轨迹修复角色；`project-memory` 记下做成了什么、没做成什么及原因；`task-manager` 是会话的角色。项目学到的东西通过两个流程离开项目，都由 owner 决定何时运行、并且只在 owner 审过要发出的确切内容之后：`library-contribution` 把项目自己写的流程和角色通过社区库分享出去；`upstream-optimization` 把项目对拿到的流程和角色所做的改进（主要是轨迹优化修好的角色）送回各自来源的库（两者都由 `library-contributor` 执行，项目需要自查时还有 `contribution-check`）。
+- **基础角色和流程**：`setup`（以及 `project-setup`），每个项目都有，Studio 打开新项目时默认加载它：它设置项目的 workflow——从合适的流程里找出符合你想法的主任务流程，按你的话修改或新建，定好参数，检查后交接。`loop-trial`（以及 `loop-tester`）按真实运行的方式检查一个流程：先静态检查，再真跑一小轮，请你判断是否符合你的目标，不符合就优化后再试。`loop-authoring`、`role-authoring`（以及 `loop-query`、`loop-editor`、`role-creator`），`owner-review`；`trajectory-optimizer` 根据轨迹修复项目里的角色；`project-memory` 记下做成了什么、没做成什么及原因；`task-manager` 是会话的角色。项目做的优化留在项目里；`library-contribution`（以及 `library-contributor`，项目需要自查时还有 `contribution-check`）只在你决定贡献、并审过要发出的确切内容后，把你选中的流程和角色上传到社区库。
 - **检查**：`loop-check` 不调用模型，用假角色把流程脚本跑几遍、走到每个分支；角色文件检查优化器依赖的各节是否齐全。
 - **hooks** 只做记录或拦截：每个结束的角色留下轨迹；交给流程的回答必须是 owner 在流程提问之后亲手输入的消息。
 
@@ -28,7 +28,7 @@ bash distribution/install-contrejour.sh --role default --project /path/to/projec
 node /path/to/project/.contrejour/dist/tools/studio.js --project /path/to/project
 ```
 
-它会打印一个一次性登录链接，在浏览器里打开即可。Studio 只在本机地址上响应；要在别的机器上用，先转发端口（`ssh -L 8790:127.0.0.1:8790 <机器>`）。先在项目里打开一次 `claude` 并接受信任提示：后台会话只在受信任的目录里启动。还没设置的项目打开时，画布上就是它的 `setup` 流程：点「运行」，它需要你决定时会在对话里问你。
+它会打印一个一次性登录链接，在浏览器里打开即可。Studio 只在本机地址上响应；要在别的机器上用，先转发端口（`ssh -L 8790:127.0.0.1:8790 <机器>`）。先在项目里打开一次 `claude` 并接受信任提示：后台会话只在受信任的目录里启动。还没设置的项目打开时，画布上就是它的 `setup` 流程：点「运行」，它需要你决定时会在对话里问你。「运行」旁边的「试运行」用 `loop-trial` 试跑画布上的流程。
 
 要管理多个项目，就让 Studio 打开一个装着这些项目的目录，并指定这个仓库作为新项目的来源：
 
@@ -42,7 +42,7 @@ node dist/tools/studio.js --workspace ~/projects --library "$PWD"
 git clone https://github.com/justforyou16007/agent-loop-community.git agent-loop-community
 ```
 
-之后从这个仓库安装的项目就能在 Studio 里找到社区库的流程和角色，`library-contribution` 也会把项目自己写的东西分享到那里。没有克隆时，贡献流程会先问你要不要获取一份。
+之后从这个仓库安装的项目就能在 Studio 里找到社区库的流程和角色，`library-contribution` 也会把你选中要贡献的内容送到那里。没有克隆时，贡献流程会先问你要不要获取一份。
 
 ## 项目包
 

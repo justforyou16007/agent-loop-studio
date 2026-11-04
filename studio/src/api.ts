@@ -79,6 +79,8 @@ export const api = {
       params,
     }),
   run: (name: string) => post<{ id: string; session: string }>("/api/run", { name }),
+  trial: (name: string, goal: string) =>
+    post<{ id: string; session: string }>("/api/trial", { name, goal }),
   answer: (id: string, text: string, references: CanvasPointer[]) =>
     post<{ id: string; session: string }>("/api/authoring/answer", { id, text, references }),
 };

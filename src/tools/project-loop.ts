@@ -9,7 +9,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { entryRoleOf, libraryRoots, sidesOf } from "./installation.js";
+import { entryRoleOf, librariesFor, sidesOf } from "./installation.js";
 import {
   frontmatter,
   loopDefinitionPath,
@@ -34,7 +34,7 @@ function libraryFile(
 ): string | null {
   const sides = sidesOf(root);
   for (const dir of [...sides.slice(1), sides[0]!])
-    for (const library of libraryRoots(root)) {
+    for (const library of librariesFor(root, dir)) {
       const file = path.join(library, "library", kind, dir, `${name}${extension}`);
       if (fs.existsSync(file)) return file;
     }

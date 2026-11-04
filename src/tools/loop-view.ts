@@ -15,7 +15,13 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createCli, runCli } from "../lib/cli.js";
-import { installedLibrary, installedRole, libraryRoots } from "./installation.js";
+import {
+  installedLibrary,
+  installedRole,
+  librariesFor,
+  libraryRoots,
+  sidesOf,
+} from "./installation.js";
 import { checkLoop, splitScript, type LoopReport } from "./loop-check.js";
 import { client } from "./loop-view-client.js";
 import {
@@ -234,17 +240,30 @@ interface LoopFile {
   script: string | null;
 }
 
-/** The library the project was installed from, by side, for loops and roles the project lacks. */
-function libraryFiles(roots: string[], side: string) {
+/**
+ * The libraries' loops and roles the project lacks, for the sides it receives: a
+ * side's own before those any project can use, so a side's loop of a framework
+ * loop's name takes its place, and in each the library whose version the project
+ * gets first. Without a profile, every side the libraries have.
+ */
+function libraryFiles(root: string) {
   const loops: LoopFile[] = [];
   const roles: RoleFile[] = [];
-  for (const library of roots) {
-    // The framework's files and the project's own side's; without a profile, every side the library has.
-    const present = fs.existsSync(path.join(library, "library", "loops"))
-      ? sideFolders(path.join(library, "library", "loops"))
-      : ["framework"];
-    const sides = present.includes(side) ? ["framework", side] : present;
-    for (const dir of sides) {
+  let sides: string[];
+  try {
+    const received = sidesOf(root);
+    sides = [...received.slice(1), received[0]!];
+  } catch {
+    sides = [
+      ...new Set(
+        libraryRoots(root).flatMap((library) =>
+          sideFolders(path.join(library, "library", "loops")),
+        ),
+      ),
+    ];
+  }
+  for (const dir of sides)
+    for (const library of librariesFor(root, dir)) {
       const loopDir = path.join(library, "library", "loops", dir);
       for (const file of markdownFiles(loopDir))
         if (!loops.some((known) => known.name === file.slice(0, -3)))
@@ -263,7 +282,6 @@ function libraryFiles(roots: string[], side: string) {
             text: readText(path.join(roleDir, file)) ?? "",
           });
     }
-  }
   return { loops, roles };
 }
 
@@ -429,7 +447,7 @@ export async function collectView(projectRoot: string, live = false): Promise<Vi
       ? { loop: chosenFile.loop, params: chosenFile.params }
       : null;
 
-  const extra = libraryFiles(library ? libraryRoots(root) : [], side);
+  const extra = library ? libraryFiles(root) : { loops: [], roles: [] };
   const roleFiles: RoleFile[] = markdownFiles(rolesDir(root)).map((file) => ({
     name: file.slice(0, -3),
     source: "project",

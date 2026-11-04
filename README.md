@@ -5,7 +5,7 @@ Agent loops on Claude Code. A **loop** schedules **roles**: which role does each
 The framework builds, reuses and improves loops and roles:
 
 - **The Studio**, the owner's console in a browser on the same machine. Say what you want in its chat: it lists the close loops at once, each previewable as a flow, and draws the closest on a canvas, its parameters beside the steps they affect. Point at steps or arrows and say what to change; `loop-authoring` drafts it in a background Claude Code session and stops for your review, with the draft on the canvas. Choose the loop a project runs and its parameter values, run any loop and watch its steps, change roles in the chat, and keep a workspace of projects: start one from a reference project, copy one.
-- **Base roles and loops**: `setup` (with `project-setup`), which every project has and the Studio opens a new project with: the project's own configuration (`configure`, which a package may give its projects its own of), the task loop and its parameter values, a check and the hand-off; `loop-authoring` and `role-authoring` (with `loop-query`, `loop-editor`, `role-creator`), `owner-review`, `trajectory-optimizer`, which fixes roles from what their trajectories show, `project-memory`, which keeps what worked and what did not, and `task-manager`, the session's role. Two loops let what a project learned leave it, each when the owner decides and only after they reviewed exactly what leaves: `library-contribution` shares the loops and roles the project made through the community library, and `upstream-optimization` sends its improvements to the loops and roles it was given, its fixed roles above all, back to the library each came from (with `library-contributor`, and `contribution-check` when the project checks what leaves).
+- **Base roles and loops**: `setup` (with `project-setup`), which every project has and the Studio opens a new project with: it sets up the project's workflow, the task loop that does what the owner wants and its parameter values, found among the loops that fit and changed or built when the owner asks, then checks the loops and hands off. `loop-trial` (with `loop-tester`) checks a loop the way it will run: the static check, then a real run on a small scale, the owner's judgement of whether it serves their goal, and an improvement before the next trial. `loop-authoring` and `role-authoring` (with `loop-query`, `loop-editor`, `role-creator`), `owner-review`, `trajectory-optimizer`, which fixes the project's roles from what their trajectories show, `project-memory`, which keeps what worked and what did not, and `task-manager`, the session's role. What a project improves stays in the project; `library-contribution` (with `library-contributor`, and `contribution-check` when the project checks what leaves) contributes the loops and roles the owner chooses to the community library, only when they decide to and after they reviewed exactly what leaves.
 - **Checks**: `loop-check` runs a loop's script against stub roles without calling a model, so every branch is reached; roles are checked for the sections the optimizer relies on.
 - **Hooks** that only record or block: every finished role leaves its trajectory; an answer passed to a loop must be a message the owner typed after the loop asked.
 
@@ -28,7 +28,7 @@ The installer writes only into the project (`.contrejour/`, `.claude/`), never g
 node /path/to/project/.contrejour/dist/tools/studio.js --project /path/to/project
 ```
 
-It prints a one-time sign-in link: open it in your browser. The Studio answers only on this machine's own address; from another machine, forward the port (`ssh -L 8790:127.0.0.1:8790 <machine>`). Open `claude` in the project once and accept the folder trust prompt: background sessions start only in a trusted folder. A project that is not set up yet opens with its `setup` loop on the canvas: press Run, and answer in the chat whenever it asks.
+It prints a one-time sign-in link: open it in your browser. The Studio answers only on this machine's own address; from another machine, forward the port (`ssh -L 8790:127.0.0.1:8790 <machine>`). Open `claude` in the project once and accept the folder trust prompt: background sessions start only in a trusted folder. A project that is not set up yet opens with its `setup` loop on the canvas: press Run, and answer in the chat whenever it asks. Trial, beside Run, tries the loop on the canvas with `loop-trial`.
 
 To keep several projects, start the Studio on a folder of them, with this checkout as the library new projects come from:
 
@@ -42,7 +42,7 @@ To reuse what other projects shared, clone the community library into this check
 git clone https://github.com/justforyou16007/agent-loop-community.git agent-loop-community
 ```
 
-Projects installed from this checkout then find its loops and roles in the Studio, and `library-contribution` shares what they made there. Without it, the contribution loop offers to fetch it first.
+Projects installed from this checkout then find its loops and roles in the Studio, and `library-contribution` contributes there what their owners choose. Without it, the contribution loop offers to fetch it first.
 
 ## A project package
 

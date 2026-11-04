@@ -1,33 +1,33 @@
 ---
 name: setup
-description: Set this project up — what is particular to it (its configure loop), the task loop it runs with its parameter values, a check of its loops, and the hand-off. Every project has it; the Studio opens a project that is not set up yet with it.
+description: Set up this project's workflow — what the owner wants it to do, the task loop that does it (found among the loops that fit, changed or built when the owner asks) with its parameter values, a check of the project's loops, and the hand-off. Every project has it; the Studio opens a project that is not set up yet with it.
 side: framework
 kind: setup
 triggers: record-trajectory, guard-owner-answers
-check-args: [{"requirement": "start"}, {"requirement": "Summarize each week's new papers on retrieval."}]
+check-args: [{"goal": "start"}, {"goal": "Plan, build and check one change to the project per round, three rounds at most."}]
 ---
 
 # Setup
 
 ## Purpose
 
-Setting a project up, the same way for every project built on the framework. What is particular to a project comes in through one step, the `configure` loop: the framework's asks what the project is for and writes `task.md`, and a package's side gives its projects one of its own (a connection, a benchmark, the machine's environment). The rest is this loop's: the loop the project runs and its parameter values, chosen with the owner from the loops that fit the task, a check of the project's loops, and a hand-off that says how to start. A project is set up once this loop has handed off. The Studio opens a project that is not set up with this loop, and a session runs it when the owner says to start a project that is not set up; the owner runs it again whenever the project should be set up differently.
+Setting up a project's workflow: the loop the project runs as its work, and how. The owner says what they want the project's work to be; the loops that fit are found among the project's and the libraries', and one is proposed with its parameter values; the owner takes it, changes it in their own words, or asks for one none of them is, which `loop-authoring` builds. The project's loops are checked, and the hand-off says how to start and how to try the workflow before the real work (`loop-trial`). What the project works on, and anything else particular to it, is the project's: setup reads `task.md` when there is one and never writes it. A project is set up once this loop has handed off. The Studio opens a project that is not set up with this loop, and a session runs it when the owner says to start such a project; the owner runs it again whenever the project's workflow should change.
 
 ## Inputs
 
-- `requirement`: the owner's words about what the project is for, verbatim; it may be empty or just "start".
+- `goal`: what the owner wants the project's work to be, in their words; it may be empty or just "start".
 - `answers`: the owner's replies so far, by review id; the session adds each one as it comes (see `running-loops.md`).
 
 ## Steps
 
-1. **Configure** — the child loop `configure` (`{requirement, answers}`) settles what is particular to this project and returns the requirement as restated and a report for the hand-off. Its waiting result is returned as it is; when it ends without finishing, so does this loop, with its reason.
-2. **Task loop** — `loop-query` finds the task loops that fit the task (`{action: "find-task-loop", requirement, notes}`), the project's current one among them. `project-setup` proposes one with its parameter values, or, when the owner's words ask for a loop none of them is, describes the loop to build (`{action: "propose", candidates, notes}`); the child loop `loop-authoring` builds that one (`{description, kind: "task"}`), its waiting result returned as it is, and it is proposed in turn. `owner-review` puts the proposal to the owner (`review_id` `task-loop:<round>:<loop>`): approval makes it the project's task loop with those values (`project-setup`, `{action: "use", loop, params}`); `revise` sends the owner's words back to this step as `notes`; `cancel` ends the loop.
+1. **Goal** — `project-setup` reads the owner's words and what the project already says about its work (`task.md`, its current task loop) (`{action: "goal", goal, notes}`): when they say what the workflow must do, it restates the goal in a few lines; otherwise `owner-review` asks the owner (`review_id` `goal:<round>`) and their words come back as `notes`.
+2. **Task loop** — `loop-query` finds the task loops that fit the goal (`{action: "find-task-loop", goal, notes}`), the project's current one among them. `project-setup` proposes one with its parameter values, or, when the owner's words ask for a loop none of them is or for a change to one, describes the loop to build (`{action: "propose", goal, candidates, notes}`); the child loop `loop-authoring` builds or changes it (`{description, kind: "task"}`), its waiting result returned as it is, and it is proposed in turn. `owner-review` puts the proposal to the owner (`review_id` `task-loop:<round>:<loop>`): approval makes it the project's task loop with those values (`project-setup`, `{action: "use", loop, params}`); `revise` sends the owner's words back to this step as `notes`; `cancel` ends the loop.
 3. **Check** — `project-setup` runs the loop and role checks (`{action: "check"}`); each stale or defective loop is regenerated by the child loop `loop-authoring` (`{regenerate: <loop>}`), and the checks run again.
-4. **Hand off** — `project-setup` records that the project is set up and writes the report for the owner: the configuration's report as it is, the task loop and its values, the checks, and how to start the work (`{action: "handoff", configured, loop, params, check}`); the loop ends with it.
+4. **Hand off** — `project-setup` records that the project is set up and writes the report for the owner: the goal, the task loop and its values, the checks, how to start the work, and how to try it first with `loop-trial` (`{action: "handoff", goal, loop, params, check}`); the loop ends with it.
 
 ## Bounds
 
-6 task-loop rounds, 2 new loops, 4 regenerated loops.
+3 goal rounds, 6 task-loop rounds, 2 loops built or changed, 4 regenerated loops.
 
 ## Waiting
 

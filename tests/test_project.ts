@@ -58,9 +58,9 @@ try {
   assert.equal(read(path.join(plain, ".contrejour/project.json")).name, "agent-loop-studio");
   for (const role of ["task-manager", "project-memory", "owner-review", "loop-editor", "trajectory-optimizer"])
     assert.ok(fs.existsSync(path.join(plain, ".claude/agents", `${role}.md`)), role);
-  for (const loop of ["setup", "configure", "loop-authoring", "role-authoring", "library-contribution", "upstream-optimization", "contribution-check"])
+  for (const loop of ["setup", "loop-trial", "loop-authoring", "role-authoring", "library-contribution", "contribution-check"])
     assert.ok(fs.existsSync(path.join(plain, ".claude/loops", `${loop}.md`)), loop);
-  assert.ok(fs.existsSync(path.join(plain, ".claude/agents/project-setup.md")));
+  for (const role of ["project-setup", "loop-tester"]) assert.ok(fs.existsSync(path.join(plain, ".claude/agents", `${role}.md`)), role);
   assert.ok(read(path.join(plain, ".claude/settings.json")).hooks.PreToolUse, "the hooks guard every loop from the start");
   assert.equal(read(path.join(plain, ".claude/settings.json")).agent, "task-manager", "every session runs as the entry role from the start");
   const projectCli = (root: string, ...args: string[]) =>
@@ -110,6 +110,8 @@ try {
     // Not set up yet: the page opens it with its setup loop, the framework's.
     assert.equal(overview.project.setup_finished, null);
     assert.equal(overview.loops.find((loop: { name: string }) => loop.name === "setup").kind, "setup");
+    // A loop is tried with loop-trial; only a loop the project has can be.
+    assert.equal((await request(at("api/trial"), { cookie, method: "POST", body: { name: "no-such-loop", goal: "" } })).status, 404);
     const flow = JSON.parse((await request(at("api/flow?name=iterate-and-check&source=project"), { cookie })).body);
     assert.deepEqual(
       flow.nodes.filter((node: { kind: string }) => node.kind === "step").map((node: { title: string }) => node.title),
@@ -200,23 +202,19 @@ try {
     "---\nname: general-helper\ndescription: Checks things any project has.\nside: framework\n---\n\n# General helper\n\n## Responsibility\nx\n\n## Inputs\nx\n\n## Output\nx\n\n## Writes\nnothing\n\n## Evaluation\nx\n",
   );
   fs.appendFileSync(path.join(third, ".claude/agents/owner-review.md"), "\nA project's improvement to a base role.\n");
-  // Shared: only what the project made, to the community library; the improved base role is not a contribution.
-  const shared = plan(third);
-  assert.equal(shared.purpose, "share");
-  assert.deepEqual(shared.libraries.map((library: { name: string }) => library.name), ["framework-checkout", "agent-loop-community"]);
-  assert.deepEqual(shared.selected.map((unit: { name: string; library: string }) => [unit.name, unit.library]), [["general-helper", "agent-loop-community"]]);
-  const improved = shared.not_selected.find((unit: { name: string }) => unit.name === "owner-review");
-  assert.deepEqual([improved.state, improved.library], ["improvement", "framework-checkout"]);
-  // Sent upstream: the improvement goes back to the library that gave it; the new role is not an improvement.
-  const upstream = plan(third, "--purpose", "upstream");
-  assert.deepEqual(upstream.selected.map((unit: { name: string; library: string }) => [unit.name, unit.library]), [["owner-review", "framework-checkout"]]);
-  assert.equal(upstream.not_selected.find((unit: { name: string }) => unit.name === "general-helper").state, "contribution");
-  assert.notEqual(shared.digest, upstream.digest);
+  // A contribution is the owner's choice of the project's new and changed loops and roles, and all of it goes to the community library.
+  const contribution = plan(third);
+  assert.deepEqual(contribution.libraries.map((library: { name: string }) => library.name), ["framework-checkout", "agent-loop-community"]);
+  assert.deepEqual(
+    contribution.selected.map((unit: { name: string; library: string; state: string }) => [unit.name, unit.library, unit.state]).sort(),
+    [["general-helper", "agent-loop-community", "new"], ["owner-review", "agent-loop-community", "new"]],
+  );
+  assert.equal(plan(third, "--exclude", "owner-review").selected.length, 1, "the owner leaves out what they choose");
   // Without the community library, there is nowhere to share to until the owner has it fetched.
   fs.rmSync(community, { recursive: true, force: true });
   const nowhere = plan(third);
   assert.equal(nowhere.library.available, false);
-  assert.match(nowhere.library.reason, /clone --purpose share/);
+  assert.match(nowhere.library.reason, /library-cli\.js clone/);
   console.log("project: ok");
 } finally {
   fs.rmSync(sandbox, { recursive: true, force: true });

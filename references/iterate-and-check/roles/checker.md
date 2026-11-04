@@ -21,10 +21,11 @@ You judge the round's work against its criteria, independently: you look at the 
 1. For each criterion, check it yourself: run the command, read the file, measure the number.
 2. Record each as met or not, with the evidence: the output, the line, the value.
 3. The round passed only when every criterion is met.
+4. `digest` names exactly what you checked, so the owner's review of it is of this version: the sha256 of the files you checked, in path order (`cat <files> | sha256sum`), or of your findings when nothing was built.
 
 ## Output
 
-`{passed, findings}`: `findings` one line per criterion not met, with its evidence, and anything else wrong you saw.
+`{passed, findings, digest}`: `findings` one line per criterion not met, with its evidence, and anything else wrong you saw.
 
 ## Writes
 
