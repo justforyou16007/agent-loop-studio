@@ -166,4 +166,4 @@ for (let round = 1; round <= 4; round += 1) {
 }
 return { fit: false, loop, reason: "the owner did not judge it fit within 4 trial rounds" };
 
-// contrejour-loop-definition-sha256: 6e40a59f30b1b7e1836cbff8da29cd6884ab8c6c173a0c9936c4e1f1932bab25
+// contrejour-loop-definition-sha256: 91663d170274f519a85f46c7eb10669e3aa3c1395933c11b02afa56497c8916b

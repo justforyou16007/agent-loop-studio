@@ -5,7 +5,7 @@ side: framework
 kind: on-request
 triggers: record-trajectory, guard-owner-answers
 child-loop-arg: loop
-check-args: [{"loop": "role-authoring", "goal": "Draft the one role the owner describes, and install it once they approve it."}]
+check-args: [{"loop": "loop-authoring", "goal": "Change the loop the owner names as they describe, and install it once they approve it."}]
 ---
 
 # Loop trial

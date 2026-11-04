@@ -338,18 +338,22 @@ function compare(
   seeded: boolean,
 ): { state: State | "both-moved"; reason?: string } {
   if (theirs !== null && ours === theirs) return { state: "in-library" };
+  // Seeded by a release that kept no baseline: what the project changed cannot be told.
+  if (base === null && seeded)
+    return {
+      state: "unknown-base",
+      reason:
+        "this project was installed before baselines were kept, so what it changed cannot be told: install into a fresh project to contribute it",
+    };
   // The community library has no file of this name: it is new there, whatever the project started from.
   if (theirs === null) return { state: "new" };
-  // The library holds what this project sent earlier, so only this project moved since.
+  // The community holds what this project started from, or what it sent earlier: only this project moved since.
   if (base === theirs || sent.has(sha256(theirs))) return { state: "changed" };
   if (base !== null) return { state: "both-moved" };
-  return seeded
-    ? {
-        state: "unknown-base",
-        reason:
-          "this project was installed before baselines were kept, so what it changed cannot be told from what the library changed: install into a fresh project to contribute it",
-      }
-    : { state: "conflict", reason: "the library already has a different file of this name" };
+  return {
+    state: "conflict",
+    reason: "the community library already has a different file of this name",
+  };
 }
 
 /** The three-way merge of a role both sides changed, or null when it needs a person. */
