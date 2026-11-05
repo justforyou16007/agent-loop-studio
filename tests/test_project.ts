@@ -341,6 +341,82 @@ else { process.stderr.write("not stood in for: " + command); process.exit(1); }
     );
     silent = await statusOf();
     assert.deepEqual([silent.note, silent.record_missing], ["API Error: 400 reasoning effort must be low, high, xhigh, max or an integer", null]);
+
+    // The chat shows the session's conversation row by row, from its transcript: what the Studio asked, what the
+    // owner said, what the session said and did, the loop it ran with each role, errors, and each turn's end.
+    const runDir = path.join(transcriptFolder, "sess-idle", "subagents", "workflows", "wf_run1");
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(runDir, "journal.jsonl"),
+      [{ type: "launched" }, { type: "started", key: "k1", agentId: "a1", label: "goal", phase: "Goal" }, { type: "result", key: "k1", agentId: "a1" }, { type: "started", key: "k2", agentId: "a2", label: "task loop", phase: "Task loop" }]
+        .map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+    );
+    fs.writeFileSync(path.join(runDir, "agent-a1.meta.json"), JSON.stringify({ agentType: "project-setup" }));
+    fs.writeFileSync(path.join(runDir, "agent-a2.meta.json"), JSON.stringify({ agentType: "loop-query" }));
+    fs.writeFileSync(
+      path.join(runDir, "agent-a1.jsonl"),
+      [
+        { type: "user", uuid: "r1", message: { role: "user", content: "{\"action\":\"goal\"}" } },
+        { type: "assistant", uuid: "r2", message: { id: "rm1", role: "assistant", content: [{ type: "text", text: "The goal is clear." }] } },
+      ].map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+    );
+    const minuteAt = (minute: number) => new Date(Date.UTC(2026, 10, 5, 8, minute)).toISOString();
+    fs.writeFileSync(
+      path.join(transcriptFolder, "sess-idle.jsonl"),
+      [
+        { type: "mode", mode: "normal" },
+        { type: "user", uuid: "u1", timestamp: minuteAt(0), message: { role: "user", content: 'Run the setup loop with args {"answers":{}}.' } },
+        { type: "attachment", attachment: {} },
+        { type: "assistant", uuid: "a1", timestamp: minuteAt(1), message: { id: "m1", role: "assistant", content: [{ type: "thinking", thinking: "", signature: "x" }] } },
+        { type: "assistant", uuid: "a2", timestamp: minuteAt(1), message: { id: "m1", role: "assistant", content: [{ type: "tool_use", id: "t-bash", name: "Bash", input: { command: "ls .claude/loops\nwc -l" } }] } },
+        { type: "user", uuid: "u2", timestamp: minuteAt(2), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t-bash", content: "setup.md" }] }, toolUseResult: { stdout: "setup.md", stderr: "" } },
+        { type: "assistant", uuid: "a3", timestamp: minuteAt(2), message: { id: "m2", role: "assistant", content: [{ type: "tool_use", id: "t-edit", name: "Edit", input: { file_path: path.join(first, "task.md"), old_string: "old", new_string: "new" } }] } },
+        { type: "user", uuid: "u3", timestamp: minuteAt(2), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t-edit", content: "edited" }] }, toolUseResult: { structuredPatch: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ["-old", "+new"] }] } },
+        { type: "assistant", uuid: "a4", timestamp: minuteAt(3), message: { id: "m3", role: "assistant", content: [{ type: "tool_use", id: "t-loop", name: "Workflow", input: { name: "setup", args: {} } }] } },
+        { type: "user", uuid: "u4", timestamp: minuteAt(3), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t-loop", content: "Started in the background as wf_run1." }] } },
+        { type: "system", uuid: "s1", timestamp: minuteAt(4), subtype: "api_error", error: { formatted: "Request timed out." }, retryAttempt: 1, maxRetries: 10 },
+        { type: "system", uuid: "s2", timestamp: minuteAt(4), subtype: "api_error", error: { formatted: "Request timed out." }, retryAttempt: 2, maxRetries: 10 },
+        { type: "user", uuid: "u5", timestamp: minuteAt(5), origin: { kind: "task-notification" }, message: { role: "user", content: '<task-notification>\n<tool-use-id>t-loop</tool-use-id>\n<status>completed</status>\n<result>{"waiting":"owner","review_id":"r1"}</result>\n</task-notification>' } },
+        { type: "assistant", uuid: "a5", timestamp: minuteAt(5), message: { id: "m4", role: "assistant", content: [{ type: "text", text: "The setup loop waits for your decision." }] } },
+        { type: "system", uuid: "s3", timestamp: minuteAt(6), subtype: "turn_duration", durationMs: 125000 },
+        { type: "user", uuid: "u6", timestamp: minuteAt(7), message: { role: "user", content: "<local-command-stdout>noise</local-command-stdout>" } },
+        { type: "user", uuid: "u7", timestamp: minuteAt(8), message: { role: "user", content: "Make it shorter\n\n[On the canvas: Step 2 · Task loop]" } },
+        { type: "assistant", uuid: "a6", timestamp: minuteAt(9), isApiErrorMessage: true, message: { id: "m5", role: "assistant", content: [{ type: "text", text: "API Error: 400 reasoning effort" }] } },
+      ].map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+    );
+    const timelineOf = async (query: string) => JSON.parse((await request(at(`api/authoring/timeline?${query}`), { cookie })).body);
+    const shown = await timelineOf("id=c9");
+    assert.equal(shown.record_missing, null);
+    assert.deepEqual(
+      shown.items.map((item: { kind: string; tool?: string; status?: string }) => [item.kind, item.tool ?? item.status ?? ""].filter(Boolean).join(":")),
+      ["prompt", "thinking", "tool:shell", "tool:edit", "tool:workflow", "notice", "text", "turn-end", "owner", "notice"],
+      "the bookkeeping, the local command's noise and the tool results' own rows are left out",
+    );
+    const [prompt, , bash, edit, loopRow, retry, text, turnEnd, owner, failure] = shown.items;
+    assert.deepEqual([prompt.loop, JSON.parse(prompt.args)], ["setup", { answers: {} }]);
+    assert.deepEqual([bash.title, bash.summary, bash.status], ["", "ls .claude/loops", "done"]);
+    assert.deepEqual([edit.summary, edit.status], ["task.md", "done"], "a path inside the project, from the project's folder");
+    assert.deepEqual([loopRow.status, loopRow.result, loopRow.run.id], ["done", "waiting:owner", "wf_run1"], "a loop runs until its notification");
+    assert.deepEqual(loopRow.run.roles, [{ agent: "a1", role: "project-setup", phase: "Goal", label: "goal", done: true }, { agent: "a2", role: "loop-query", phase: "Task loop", label: "task loop", done: false }]);
+    assert.deepEqual([retry.level, retry.text], ["warning", "Request timed out. (retry 2/10)"], "retries are one notice that follows them");
+    assert.equal(text.text, "The setup loop waits for your decision.");
+    assert.equal(turnEnd.durationMs, 125000);
+    assert.deepEqual([owner.text, owner.pointers], ["Make it shorter", ["Step 2 · Task loop"]]);
+    assert.deepEqual([failure.level, failure.text], ["error", "API Error: 400 reasoning effort"]);
+    // A tool call in full, read when the owner opens it.
+    const toolOf = async (query: string) => JSON.parse((await request(at(`api/authoring/tool?${query}`), { cookie })).body);
+    assert.deepEqual(await toolOf("id=c9&tool=t-bash"), { kind: "shell", command: "ls .claude/loops\nwc -l", output: "setup.md", error: "" });
+    assert.deepEqual((await toolOf("id=c9&tool=t-edit")).lines, [{ kind: "hunk", text: "@@ -1,1 +1,1 @@" }, { kind: "remove", text: "old" }, { kind: "add", text: "new" }]);
+    assert.equal((await request(at("api/authoring/tool?id=c9&tool=nope"), { cookie })).status, 404);
+    // One role of the loop, from its own transcript.
+    const role = await timelineOf("id=c9&run=wf_run1&agent=a1");
+    assert.deepEqual(role.items.map((item: { kind: string }) => item.kind), ["prompt", "text"]);
+    assert.equal((await request(at("api/authoring/timeline?id=c9&run=..&agent=a1"), { cookie })).status, 200, "a run that is no name reads nothing");
+    assert.equal((await request(at("api/authoring/timeline?id=nope"), { cookie })).status, 404);
+    // Stopping the session where it is.
+    fs.rmSync(stoppedFile, { force: true });
+    assert.equal((await request(at("api/authoring/stop"), { cookie, method: "POST", body: { id: "c9" } })).status, 200);
+    assert.equal(fs.readFileSync(stoppedFile, "utf8"), "idle01\n");
     fs.rmSync(path.join(first, ".contrejour/studio/conversations.json"));
     const store = path.join(first, ".contrejour/studio/conversations.json");
     assert.equal(fs.existsSync(store) ? read(store).conversations.length : 0, 0, "no conversation is recorded for a session that never started");

@@ -102,6 +102,8 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [role, setRole] = useState<string | null>(null);
   const [conversation, setConversation] = useState<string | null>(null);
+  /** A message sent while the session works, waiting for its turn to end. */
+  const [queued, setQueued] = useState<{ text: string; pointed: Reference[] } | null>(null);
   const [status, setStatus] = useState<AuthoringStatus | null>(null);
   const [showOriginal, setShowOriginal] = useState(false);
   /** A role the chat changes, or a new one (name null), instead of the loop on the canvas. */
@@ -220,14 +222,13 @@ export function App() {
             );
             if (!open) return;
             setConversation(open.id);
-            if (open.state === "running")
-              pendingMessage.current = say({
-                from: "studio",
-                key: "authoring_resumed",
-                values: { session: open.session },
-                pending: true,
-                progress: open.progress,
-              });
+            pendingMessage.current = say({
+              from: "studio",
+              key: "session_resumed",
+              values: { session: open.session },
+              session: open.id,
+              status: open,
+            });
             setStatus(open);
           })
           .catch(() => undefined);
@@ -316,8 +317,18 @@ export function App() {
     setBusy(true);
     try {
       if (conversation && status?.state === "waiting") {
+        // Shown in the session as it is sent, until its transcript has it.
+        const sentAt = new Date().toISOString();
+        const sessionMessage = pendingMessage.current;
+        if (sessionMessage !== null)
+          setMessages((current) =>
+            current.map((entry) =>
+              entry.id === sessionMessage
+                ? { ...entry, replies: [...(entry.replies ?? []), { text, at: sentAt }] }
+                : entry,
+            ),
+          );
         await api.answer(conversation, text, pointed);
-        pendingMessage.current = say({ from: "studio", key: "authoring_running", pending: true });
         setStatus({ ...status, state: "running", review: null });
       } else if (roleTarget) {
         const started = await api.startAuthoring({
@@ -335,7 +346,7 @@ export function App() {
           from: "studio",
           key: roleTarget.name ? "role_started" : "role_new_started",
           values: { role: roleTarget.name ?? "", session: started.session },
-          pending: true,
+          session: started.id,
         });
       } else {
         const started = await api.startAuthoring({
@@ -351,7 +362,7 @@ export function App() {
           from: "studio",
           key: flow ? "authoring_started" : "authoring_new",
           values: { loop: flow?.loop.name ?? "", session: started.session },
-          pending: true,
+          session: started.id,
         });
       }
     } catch (reason) {
@@ -367,13 +378,35 @@ export function App() {
    * finding the loops close to them or changing the one shown; with nothing on
    * the canvas yet, the close loops are found at once and the closest is shown.
    */
-  const send = async (text: string) => {
-    const pointed = references;
-    say({ from: "owner", text, references: pointed });
+  const send = async (text: string, pointed: Reference[] = references) => {
     setReferences([]);
-    if (status?.state === "waiting" || flow || roleTarget) await change(text, pointed);
+    // While the session works, a message waits for its turn to end.
+    if (conversation && status?.state === "running") {
+      setQueued({ text, pointed });
+      return;
+    }
+    // A reply to the session that waits is shown in its conversation, not again here.
+    const reply = Boolean(conversation && status?.state === "waiting");
+    if (!reply) say({ from: "owner", text, references: pointed });
+    if (reply || flow || roleTarget) await change(text, pointed);
     else if (text) await find(text);
   };
+  /** Stop the session where it is; a reply continues it later. */
+  const stopSession = async () => {
+    if (!conversation) return;
+    try {
+      await api.stop(conversation);
+    } catch (reason) {
+      say({ from: "studio", text: t("failed_start") + (reason as Error).message });
+    }
+  };
+  // A queued message goes once the session's turn is over.
+  useEffect(() => {
+    if (!queued || (conversation && status?.state === "running")) return;
+    const next = queued;
+    setQueued(null);
+    void send(next.text, next.pointed);
+  }, [queued, conversation, status?.state]);
 
   // Follow the conversation: often while its loop works, now and then while it waits.
   useEffect(() => {
@@ -400,61 +433,26 @@ export function App() {
     };
   }, [conversation, status?.state === "running"]);
 
-  // While the loop works, its message lists the roles it has started.
+  // The session's message keeps its conversation's latest status, for when the chat has moved on.
   useEffect(() => {
-    if (status?.state !== "running" || pendingMessage.current === null) return;
+    if (!status || pendingMessage.current === null) return;
     const id = pendingMessage.current;
     setMessages((current) =>
-      current.map((entry) => (entry.id === id ? { ...entry, progress: status.progress } : entry)),
+      current.map((entry) =>
+        entry.id === id && entry.session === status.id ? { ...entry, status } : entry,
+      ),
     );
   }, [status]);
 
-  // Tell the owner, once, when the conversation stops for them or ends.
+  // When the conversation stops for the owner or ends: its footer says so; here, what follows from it.
   useEffect(() => {
     if (!status || status.state === "running") return;
     const key = `${status.id}:${status.state}:${status.review?.review_id ?? ""}:${status.reply_failed}`;
     if (handled.current === key) return;
     handled.current = key;
-    const message: Omit<ChatMessage, "id"> =
-      status.state === "waiting" && status.reply_failed
-        ? {
-            from: "studio",
-            key: "reply_blocked",
-            markdown: status.last_words,
-            actions: true,
-          }
-        : status.state === "waiting"
-          ? {
-              from: "studio",
-              key: status.draft
-                ? status.draft.roles.length
-                  ? "waiting_draft"
-                  : "waiting_draft_plain"
-                : "waiting",
-              values: { roles: status.draft?.roles.join(", ") ?? "" },
-              files: status.draft?.flow ? undefined : status.draft?.files,
-              markdown: `${status.note}\n\n**${status.review?.question ?? ""}**`,
-              actions: true,
-            }
-          : status.state === "done"
-            ? ended(status.result)
-            : status.state === "gone"
-              ? { from: "studio", key: "authoring_gone", values: { session: status.session } }
-              : {
-                  from: "studio",
-                  // With nothing it said to show, how to look at it.
-                  key: status.note ? "authoring_idle" : "authoring_idle_silent",
-                  values: { session: status.session },
-                  markdown: status.note || undefined,
-                };
-    if (pendingMessage.current !== null) replace(pendingMessage.current, message);
-    else say(message);
-    // The Studio follows a loop through Claude Code's transcript of its session: without it, it sees nothing.
-    if (status.record_missing)
-      say({ from: "studio", key: "record_missing", values: { dir: status.record_missing } });
-    pendingMessage.current = null;
     setShowOriginal(false);
     if (status.state === "done") {
+      pendingMessage.current = null;
       // The canvas shows what came of it: the loop installed or chosen as it is, or the one changed.
       const fields = isObject(status.result) ? status.result : {};
       const made =
@@ -471,7 +469,7 @@ export function App() {
       });
       setConversation(null);
     }
-  }, [status, replace, say, load, open]);
+  }, [status, load, open]);
 
   /** The owner makes the loop on the canvas the project's task loop, with these values. */
   const useThis = async (params: Record<string, unknown>) => {
@@ -495,7 +493,7 @@ export function App() {
         from: "studio",
         key: "run_launched",
         values: { loop: flow.loop.name, session: started.session },
-        pending: true,
+        session: started.id,
       });
     } catch (reason) {
       startFailed(reason, () => void runIt());
@@ -513,7 +511,7 @@ export function App() {
         from: "studio",
         key: "publish_launched",
         values: { session: started.session },
-        pending: true,
+        session: started.id,
       });
     } catch (reason) {
       startFailed(reason, () => void publishIt());
@@ -531,7 +529,7 @@ export function App() {
         from: "studio",
         key: "trial_launched",
         values: { loop: flow.loop.name, session: started.session },
-        pending: true,
+        session: started.id,
       });
     } catch (reason) {
       startFailed(reason, () => void tryIt());
@@ -739,6 +737,11 @@ export function App() {
                     onClearTarget={() => setRoleTarget(null)}
                     onViewFiles={setRoleDraft}
                     waiting={status?.state === "waiting"}
+                    conversation={conversation}
+                    running={Boolean(conversation && status?.state === "running")}
+                    onStop={stopSession}
+                    queued={queued?.text ?? null}
+                    onUnqueue={() => setQueued(null)}
                     names={names}
                     focus={focus}
                     onFocus={toggleFocus}
@@ -1075,43 +1078,4 @@ function EmptyCanvas({
       )}
     </div>
   );
-}
-
-/** The end of a change, as the owner reads it: installed, not installed and why, or what the loop returned. */
-function ended(result: unknown): Omit<ChatMessage, "id"> {
-  const fields = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
-  const name =
-    typeof fields.loop === "string"
-      ? fields.loop
-      : typeof fields.role === "string"
-        ? fields.role
-        : "";
-  if (fields.installed === true || typeof fields.installed === "string")
-    return {
-      from: "studio",
-      key: "authoring_installed",
-      values: { name: typeof fields.installed === "string" ? fields.installed : name },
-    };
-  // The owner chose an existing loop as it is: nothing was drafted, nothing failed.
-  if (fields.reused === true && name)
-    return { from: "studio", key: "authoring_reused", values: { name } };
-  if (fields.installed === false)
-    return {
-      from: "studio",
-      key: "authoring_not_installed",
-      values: { name, reason: String(fields.reason ?? "") },
-    };
-  return { from: "studio", key: "authoring_done", values: { result: summary(result) } };
-}
-
-/** What a loop returned, in a line: the name it installed, or its result as it is. */
-function summary(result: unknown): string {
-  if (typeof result === "string") return result;
-  if (result && typeof result === "object") {
-    const fields = result as Record<string, unknown>;
-    for (const key of ["installed", "loop", "role", "name", "reason"])
-      if (typeof fields[key] === "string") return String(fields[key]);
-    return JSON.stringify(result).slice(0, 300);
-  }
-  return String(result ?? "");
 }

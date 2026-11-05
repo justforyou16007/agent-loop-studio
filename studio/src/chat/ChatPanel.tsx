@@ -4,6 +4,9 @@ import {
   AtSign,
   Box,
   Check,
+  ChevronDown,
+  Clock,
+  Square,
   Copy,
   RotateCcw,
   Eye,
@@ -19,6 +22,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { Candidate } from "../../../src/tools/studio-types.js";
 import { sentenceParts, useLang, type TextKey } from "../i18n.js";
 import { Markdown } from "../Markdown.js";
+import { SessionView } from "./SessionView.js";
 import type { LoopRef } from "../PreviewDialog.js";
 import type { ChatMessage, Focus, Names, Pointable, Reference } from "../types.js";
 import { Badge, Button, cx, LoopBadges } from "../ui.js";
@@ -55,6 +59,11 @@ export function ChatPanel({
   names,
   focus,
   onFocus,
+  conversation,
+  running,
+  onStop,
+  queued,
+  onUnqueue,
 }: {
   messages: ChatMessage[];
   references: Reference[];
@@ -79,9 +88,24 @@ export function ChatPanel({
   names: Names;
   focus: Focus | null;
   onFocus: (focus: Focus) => void;
+  /** The conversation going on now, whose session the chat follows. */
+  conversation: string | null;
+  /** Its session is working: a message waits for its turn to end, and it can be stopped. */
+  running: boolean;
+  onStop: () => Promise<void>;
+  /** A message waiting for the session's turn to end. */
+  queued: string | null;
+  onUnqueue: () => void;
 }) {
   const { t } = useLang();
   const [draft, setDraft] = useState("");
+  /** What the owner sent, newest last: Up in an empty box brings it back. */
+  const sent = useRef<string[]>([]);
+  const recalled = useRef<number | null>(null);
+  /** The list follows its end while the owner has not scrolled away from it. */
+  const pinned = useRef(true);
+  const [away, setAway] = useState(false);
+  const content = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLTextAreaElement>(null);
   const options = useRef<HTMLUListElement>(null);
@@ -90,8 +114,26 @@ export function ChatPanel({
   const [active, setActive] = useState(0);
   /** Where the @ whose list the owner closed with Esc is: it stays closed until another @ is typed. */
   const dismissed = useRef<number | null>(null);
+  const toEnd = (smooth = false) => {
+    pinned.current = true;
+    setAway(false);
+    list.current?.scrollTo({
+      top: list.current.scrollHeight,
+      behavior: smooth ? "smooth" : "auto",
+    });
+  };
+  // Growing rows (a session's live work) keep the end in view while the owner follows it.
   useEffect(() => {
-    list.current?.scrollTo({ top: list.current.scrollHeight, behavior: "smooth" });
+    const body = content.current;
+    if (!body) return;
+    const observer = new ResizeObserver(() => {
+      if (pinned.current) list.current?.scrollTo({ top: list.current.scrollHeight });
+    });
+    observer.observe(body);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    if (pinned.current) toEnd();
   }, [messages]);
   useEffect(() => {
     if (references.length) box.current?.focus();
@@ -151,8 +193,11 @@ export function ChatPanel({
     const text = draft.trim();
     if ((!text && !references.length) || busy) return;
     onSend(text);
+    if (text) sent.current = [...sent.current.filter((known) => known !== text), text].slice(-50);
+    recalled.current = null;
     setDraft("");
     setMention(null);
+    toEnd(true);
   };
   const onlyWelcome =
     messages.length <= 2 && messages.every((message) => message.from === "studio");
@@ -164,40 +209,82 @@ export function ChatPanel({
         <h2 className="text-sm font-semibold">{t("chat")}</h2>
         <span className="text-xs text-ink-4">{t("chat_hint")}</span>
       </header>
-      <div ref={list} className="scroll-thin flex-1 space-y-4 overflow-y-auto px-4 py-4">
-        {messages.map((message) => (
-          <Message
-            key={message.id}
-            message={message}
-            onPreview={onPreview}
-            onOpen={onOpen}
-            current={current}
-            onReply={waiting && !busy ? onSend : undefined}
-            onViewFiles={onViewFiles}
-            names={names}
-            focus={focus}
-            onFocus={onFocus}
-          />
-        ))}
-        {onlyWelcome && (
-          <div className="space-y-1.5">
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-4">
-              {t("examples")}
-            </div>
-            {(["example_1", "example_2", "example_3"] as const).map((key) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setDraft(t(key))}
-                className="block w-full rounded-xl border border-line px-3 py-2 text-left text-[13px] leading-5 text-ink-2 hover:border-brand-500 hover:bg-brand-50"
-              >
-                {t(key)}
-              </button>
+      <div className="relative min-h-0 flex-1">
+        <div
+          ref={list}
+          onScroll={(event) => {
+            const box = event.currentTarget;
+            const near = box.scrollHeight - box.scrollTop - box.clientHeight < 64;
+            pinned.current = near;
+            setAway(!near);
+          }}
+          className="scroll-thin h-full overflow-y-auto px-4 py-4"
+        >
+          <div ref={content} className="space-y-4">
+            {messages.map((message) => (
+              <Message
+                key={message.id}
+                message={message}
+                onPreview={onPreview}
+                onOpen={onOpen}
+                current={current}
+                onReply={waiting && !busy ? onSend : undefined}
+                onViewFiles={onViewFiles}
+                names={names}
+                focus={focus}
+                onFocus={onFocus}
+                conversation={conversation}
+                onStop={onStop}
+              />
             ))}
+            {onlyWelcome && (
+              <div className="space-y-1.5">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-4">
+                  {t("examples")}
+                </div>
+                {(["example_1", "example_2", "example_3"] as const).map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setDraft(t(key))}
+                    className="block w-full rounded-xl border border-line px-3 py-2 text-left text-[13px] leading-5 text-ink-2 hover:border-brand-500 hover:bg-brand-50"
+                  >
+                    {t(key)}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
+        </div>
+        {away && (
+          <button
+            type="button"
+            onClick={() => toEnd(true)}
+            title={t("jump_latest")}
+            className="absolute bottom-3 left-1/2 flex h-8 -translate-x-1/2 items-center gap-1 rounded-full border border-line bg-panel px-3 text-[12px] text-ink-2 shadow-float hover:bg-canvas"
+          >
+            <ChevronDown size={14} /> {t("jump_latest")}
+          </button>
         )}
       </div>
       <div className="border-t border-line p-3">
+        {queued && (
+          <div className="mb-2 flex items-start gap-1.5 rounded-lg bg-canvas px-2.5 py-1.5 text-[12px] text-ink-2">
+            <Clock size={12} className="mt-0.5 shrink-0 text-ink-4" />
+            <span className="min-w-0 flex-1">
+              <span className="text-ink-4">{t("queue_label")}</span>{" "}
+              <span className="line-clamp-2">{queued}</span>
+            </span>
+            <button
+              type="button"
+              title={t("queue_cancel")}
+              onClick={onUnqueue}
+              className="rounded p-0.5 hover:bg-white"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        )}
         {target && (
           <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-loop-50 px-2.5 py-1.5 text-[12px] text-loop-600">
             <PencilLine size={12} />
@@ -330,6 +417,29 @@ export function ChatPanel({
                   return;
                 }
               }
+              // Up in an empty box (or on what Up brought back) recalls what was sent before.
+              if (
+                event.key === "ArrowUp" &&
+                sent.current.length &&
+                (!draft || recalled.current !== null) &&
+                event.currentTarget.selectionStart === 0
+              ) {
+                event.preventDefault();
+                const at =
+                  recalled.current === null
+                    ? sent.current.length - 1
+                    : Math.max(0, recalled.current - 1);
+                recalled.current = at;
+                setDraft(sent.current[at]!);
+                return;
+              }
+              if (event.key === "ArrowDown" && recalled.current !== null) {
+                event.preventDefault();
+                const at = recalled.current + 1;
+                recalled.current = at < sent.current.length ? at : null;
+                setDraft(at < sent.current.length ? sent.current[at]! : "");
+                return;
+              }
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
                 send();
@@ -348,15 +458,35 @@ export function ChatPanel({
             >
               <AtSign size={16} />
             </button>
-            <button
-              type="button"
-              onClick={send}
-              disabled={busy || (!draft.trim() && !references.length)}
-              title={t("send")}
-              className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-600 text-white shadow-card hover:bg-brand-700 disabled:opacity-40"
-            >
-              {busy ? <Loader2 size={15} className="animate-spin" /> : <ArrowUp size={16} />}
-            </button>
+            {running && !draft.trim() && !references.length ? (
+              <button
+                type="button"
+                onClick={() => void onStop()}
+                title={t("session_stop")}
+                className="flex h-8 w-8 items-center justify-center rounded-lg bg-ink text-white shadow-card hover:opacity-90"
+              >
+                <Square size={12} fill="currentColor" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={send}
+                disabled={busy || (!draft.trim() && !references.length)}
+                title={running ? t("queue_send") : t("send")}
+                className="flex h-8 items-center justify-center gap-1 rounded-lg bg-brand-600 px-2 text-white shadow-card hover:bg-brand-700 disabled:opacity-40"
+              >
+                {busy ? (
+                  <Loader2 size={15} className="animate-spin" />
+                ) : running ? (
+                  <>
+                    <Clock size={14} />
+                    <span className="text-[12px]">{t("queue_send")}</span>
+                  </>
+                ) : (
+                  <ArrowUp size={16} />
+                )}
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -374,6 +504,8 @@ function Message({
   names,
   focus,
   onFocus,
+  conversation,
+  onStop,
 }: {
   message: ChatMessage;
   onPreview: (target: LoopRef) => void;
@@ -385,6 +517,8 @@ function Message({
   names: Names;
   focus: Focus | null;
   onFocus: (focus: Focus) => void;
+  conversation: string | null;
+  onStop: () => Promise<void>;
 }) {
   const { t } = useLang();
   if (message.from === "owner")
@@ -429,6 +563,19 @@ function Message({
             message.text
           )}
         </p>
+        {message.session && (
+          <SessionView
+            conversation={message.session}
+            status={message.status ?? null}
+            live={message.session === conversation}
+            pending={message.replies ?? []}
+            onReply={message.session === conversation ? onReply : undefined}
+            onStop={message.session === conversation ? onStop : undefined}
+            onViewFiles={onViewFiles}
+            names={names}
+            onFocus={onFocus}
+          />
+        )}
         {message.progress && message.progress.length > 0 && (
           <ol className="space-y-1 rounded-xl border border-line bg-canvas/60 px-3 py-2">
             {message.progress.map((step, index) => (

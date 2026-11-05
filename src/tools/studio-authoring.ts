@@ -33,8 +33,19 @@ import {
   type BackgroundSession,
   type SessionOptions,
 } from "./sessions.js";
+import {
+  roleTimeline,
+  sessionTimeline,
+  toolDetail,
+  transcriptEntries,
+} from "./session-timeline.js";
 import { writeStateJsonAtomic } from "./state-file.js";
-import type { AuthoringStatus, CanvasPointer } from "./studio-types.js";
+import type {
+  AuthoringStatus,
+  CanvasPointer,
+  SessionTimeline,
+  ToolDetail,
+} from "./studio-types.js";
 import { isRecord } from "./validate.js";
 
 export type AuthoringLoop = "loop-authoring" | "role-authoring";
@@ -270,6 +281,59 @@ export async function releaseSessions(
       if (!stopped.ok) throw new Error(`claude stop failed: ${stopped.stderr}`);
     }
   return [];
+}
+
+/** The transcript of a conversation's session, by the conversation's id; undefined for no such conversation. */
+function transcriptOf(root: string, id: string): string | null | undefined {
+  const conversation = readStore(root).find((entry) => entry.id === id);
+  return conversation ? transcriptPath(root, conversation.session.session_id) : undefined;
+}
+/** A conversation as the chat shows it, or one role of a loop it ran; null for no such conversation. */
+export function conversationTimeline(
+  projectRoot: string,
+  id: string,
+  role: { run: string; agent: string } | null = null,
+): SessionTimeline | null {
+  const root = path.resolve(projectRoot);
+  const transcript = transcriptOf(root, id);
+  if (transcript === undefined) return null;
+  return role
+    ? roleTimeline(transcript, role.run, role.agent, root)
+    : sessionTimeline(transcript, root, transcriptsDir());
+}
+/** One tool call of a conversation, or of one role of a loop it ran, in full. */
+export function conversationTool(
+  projectRoot: string,
+  id: string,
+  tool: string,
+  role: { run: string; agent: string } | null = null,
+): ToolDetail | null {
+  const root = path.resolve(projectRoot);
+  const transcript = transcriptOf(root, id);
+  if (!transcript) return null;
+  const file =
+    role && /^[A-Za-z0-9_-]+$/.test(role.run) && /^[A-Za-z0-9_-]+$/.test(role.agent)
+      ? path.join(
+          transcript.replace(/\.jsonl$/, ""),
+          "subagents",
+          "workflows",
+          role.run,
+          `agent-${role.agent}.jsonl`,
+        )
+      : transcript;
+  return toolDetail(transcriptEntries(file), tool, root);
+}
+/** Stop a conversation's session where it is, a loop it runs with it; a message continues it later. */
+export async function stopConversation(
+  projectRoot: string,
+  options: SessionOptions,
+  id: string,
+): Promise<void> {
+  const root = path.resolve(projectRoot);
+  const conversation = readStore(root).find((entry) => entry.id === id);
+  if (!conversation) throw new Error(`no conversation ${id}`);
+  const stopped = await runClaude(stopArgv(options, conversation.session), root);
+  if (!stopped.ok) throw new Error(`claude stop failed: ${stopped.stderr}`);
 }
 
 /** A silent session's terminal output, read at most once a minute while the page keeps asking. */

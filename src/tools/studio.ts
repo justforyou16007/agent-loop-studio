@@ -34,7 +34,10 @@ import {
 import {
   answerConversation,
   conversationStatuses,
+  conversationTimeline,
+  conversationTool,
   releaseSessions,
+  stopConversation,
   runLoop,
   startConversation,
   type AuthoringLoop,
@@ -565,6 +568,24 @@ export async function serveStudio(
     response: http.ServerResponse,
   ): Promise<void> {
     if (request.method === "GET" || request.method === "HEAD") {
+      const id = url.searchParams.get("id") ?? "";
+      const run = url.searchParams.get("run");
+      const agent = url.searchParams.get("agent");
+      const role = run && agent ? { run, agent } : null;
+      // A conversation as the chat shows it, row by row; or one role of a loop it ran.
+      if (url.pathname === "/api/authoring/timeline") {
+        const timeline = conversationTimeline(root, id, role);
+        return timeline
+          ? json(response, 200, timeline, head)
+          : json(response, 404, { error: `no conversation ${id}` }, head);
+      }
+      // One tool call in full, read when the owner opens it.
+      if (url.pathname === "/api/authoring/tool") {
+        const detail = conversationTool(root, id, url.searchParams.get("tool") ?? "", role);
+        return detail
+          ? json(response, 200, detail, head)
+          : json(response, 404, { error: "no such tool call" }, head);
+      }
       if (url.pathname !== "/api/authoring")
         return json(response, 404, { error: "not found" }, head);
       return json(
@@ -595,6 +616,11 @@ export async function serveStudio(
         pointers,
       });
       return json(response, 200, { id: conversation.id, session: conversation.session.id });
+    }
+    if (url.pathname === "/api/authoring/stop") {
+      if (typeof body.id !== "string") return json(response, 400, { error: "which conversation" });
+      await stopConversation(root, sessionOptions, body.id);
+      return json(response, 200, { stopped: body.id });
     }
     if (url.pathname === "/api/authoring/answer") {
       if (typeof body.id !== "string") return json(response, 400, { error: "which conversation" });

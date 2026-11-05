@@ -155,3 +155,35 @@ body {
 .scroll-thin {
   scrollbar-width: thin;
 }
+
+/* A row still working: a light sweeps across its words. */
+@keyframes studio-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+.shimmer-text {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-ink-4) 0%,
+    var(--color-ink-4) 38%,
+    var(--color-ink) 50%,
+    var(--color-ink-4) 62%,
+    var(--color-ink-4) 100%
+  );
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: studio-shimmer 1.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .shimmer-text {
+    animation: none;
+    color: var(--color-ink-3);
+    background: none;
+  }
+}

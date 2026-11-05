@@ -9,6 +9,8 @@ import type {
   ProjectsInfo,
   RoleDetail,
   SearchResult,
+  SessionTimeline,
+  ToolDetail,
 } from "../../src/tools/studio-types.js";
 
 /** What went wrong, as the owner reads it: the helper's words without its code (`NOT_A_PROJECT: ...`). */
@@ -110,6 +112,17 @@ export const api = {
   run: (name: string) => post<{ id: string; session: string }>("/api/run", { name }),
   trial: (name: string, goal: string) =>
     post<{ id: string; session: string }>("/api/trial", { name, goal }),
+  /** A conversation as the chat shows it, row by row; or one role of a loop it ran. */
+  timeline: (id: string, role?: { run: string; agent: string }) =>
+    get<SessionTimeline>(
+      `/api/authoring/timeline?${query({ id, run: role?.run, agent: role?.agent })}`,
+    ),
+  /** One tool call of a conversation, or of a role, in full. */
+  tool: (id: string, tool: string, role?: { run: string; agent: string }) =>
+    get<ToolDetail>(
+      `/api/authoring/tool?${query({ id, tool, run: role?.run, agent: role?.agent })}`,
+    ),
+  stop: (id: string) => post<{ stopped: string }>("/api/authoring/stop", { id }),
   answer: (id: string, text: string, references: CanvasPointer[]) =>
     post<{ id: string; session: string }>("/api/authoring/answer", { id, text, references }),
 };

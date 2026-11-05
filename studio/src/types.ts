@@ -51,4 +51,10 @@ export interface ChatMessage {
   trust?: { folder: string; detail?: string };
   /** Starts again what could not start, once what stood in the way is gone. */
   retry?: () => void;
+  /** A conversation with a background session, shown as it goes under this message. */
+  session?: string;
+  /** That conversation's latest status, kept with the message once the chat moves on. */
+  status?: import("../../src/tools/studio-types.js").AuthoringStatus | null;
+  /** What the owner sent it that its transcript does not show yet. */
+  replies?: { text: string; at: string }[];
 }

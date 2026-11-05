@@ -219,3 +219,95 @@ export interface FolderListing {
   folders: { name: string; path: string }[];
   projects: number;
 }
+
+/** What a tool call does, for the chat's one-line view of it. */
+export type ToolKind =
+  | "shell"
+  | "read"
+  | "write"
+  | "edit"
+  | "search"
+  | "fetch"
+  | "agent"
+  | "workflow"
+  | "skill"
+  | "todo"
+  | "other";
+/** A role a loop run started: what it is, and whether it has finished. */
+export interface TimelineRole {
+  /** Its id in the run, to read what it did. */
+  agent: string;
+  role: string;
+  phase: string;
+  label: string;
+  done: boolean;
+}
+/** A loop the session ran: its run, and the roles it started so far. */
+export interface TimelineRun {
+  id: string;
+  roles: TimelineRole[];
+}
+/**
+ * One row of a session's conversation, as the chat shows it: what the Studio
+ * asked, what the owner said, what the session said, each tool it called (one
+ * row whose status follows its result), notices, and where each turn ended.
+ */
+export type TimelineItem =
+  | {
+      kind: "prompt";
+      id: string;
+      turn: number;
+      at: string;
+      /** The loop the Studio asked the session to run, when it asked for one. */
+      loop: string | null;
+      /** The loop's arguments, as JSON. */
+      args: string;
+      text: string;
+    }
+  | { kind: "owner"; id: string; turn: number; at: string; text: string; pointers: string[] }
+  | { kind: "text"; id: string; turn: number; at: string; text: string }
+  | { kind: "thinking"; id: string; turn: number; at: string }
+  | {
+      kind: "tool";
+      id: string;
+      turn: number;
+      at: string;
+      /** The tool's own name, such as `Bash`. */
+      name: string;
+      tool: ToolKind;
+      /** A tool the chat has no name for, named from its own. */
+      title: string;
+      /** What it was called on, in one line: a command, a path, a pattern. */
+      summary: string;
+      status: "running" | "done" | "failed" | "canceled";
+      ended: string;
+      /** For a loop, its run's roles. */
+      run: TimelineRun | null;
+      /** What a loop or a background agent returned, in a line. */
+      result: string;
+    }
+  | {
+      kind: "notice";
+      id: string;
+      turn: number;
+      at: string;
+      level: "info" | "warning" | "error";
+      text: string;
+    }
+  | { kind: "turn-end"; id: string; turn: number; at: string; durationMs: number };
+export interface SessionTimeline {
+  items: TimelineItem[];
+  /** Claude Code's folder of transcripts, when this session's transcript is not in it. */
+  record_missing: string | null;
+}
+/** What one tool call did, in full, read when the owner opens it. */
+export type ToolDetail =
+  | { kind: "shell"; command: string; output: string; error: string }
+  | {
+      kind: "diff";
+      file: string;
+      lines: { kind: "add" | "remove" | "context" | "hunk"; text: string }[];
+      error: string;
+    }
+  | { kind: "content"; file: string; content: string; error: string }
+  | { kind: "text"; input: string; output: string; error: string };
