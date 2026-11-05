@@ -442,12 +442,16 @@ export function App() {
               ? { from: "studio", key: "authoring_gone", values: { session: status.session } }
               : {
                   from: "studio",
-                  key: "authoring_idle",
+                  // With nothing it said to show, how to look at it.
+                  key: status.note ? "authoring_idle" : "authoring_idle_silent",
                   values: { session: status.session },
-                  markdown: status.note,
+                  markdown: status.note || undefined,
                 };
     if (pendingMessage.current !== null) replace(pendingMessage.current, message);
     else say(message);
+    // The Studio follows a loop through Claude Code's transcript of its session: without it, it sees nothing.
+    if (status.record_missing)
+      say({ from: "studio", key: "record_missing", values: { dir: status.record_missing } });
     pendingMessage.current = null;
     setShowOriginal(false);
     if (status.state === "done") {

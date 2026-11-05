@@ -16,6 +16,7 @@ import { entryRoleOf } from "./installation.js";
 import { collectDraftView } from "./loop-view.js";
 import {
   lastAssistantText,
+  lastWords,
   listSessions,
   loopResults,
   ownerWait,
@@ -23,10 +24,12 @@ import {
   runClaude,
   runProgress,
   sessionControl,
+  sessionLogs,
   sessionState,
   startSession,
   stopArgv,
   transcriptPath,
+  transcriptsDir,
   type BackgroundSession,
   type SessionOptions,
 } from "./sessions.js";
@@ -269,6 +272,20 @@ export async function releaseSessions(
   return [];
 }
 
+/** A silent session's terminal output, read at most once a minute while the page keeps asking. */
+const logsRead = new Map<string, { at: number; text: string }>();
+async function recentLogs(
+  options: SessionOptions,
+  root: string,
+  session: BackgroundSession,
+): Promise<string> {
+  const known = logsRead.get(session.id);
+  if (known && Date.now() - known.at < 60_000) return known.text;
+  const text = await sessionLogs(options, root, session).catch(() => "");
+  logsRead.set(session.id, { at: Date.now(), text });
+  return text;
+}
+
 /** How each recent conversation stands: working, waiting for the owner (with the note and the draft), or ended. */
 export async function conversationStatuses(
   projectRoot: string,
@@ -301,6 +318,15 @@ export async function conversationStatuses(
     const review = state === "waiting" ? ownerWait(last) : null;
     // A reply that did not reach the loop: what the session said about it.
     const replyFailed = state === "waiting" && pending;
+    // A session that stopped with no result: its last words, from its transcript or else its terminal.
+    let silent = "";
+    if (state === "idle" || state === "stopped") {
+      silent = lastWords(entries);
+      if (!silent) {
+        const logs = await recentLogs(options, root, conversation.session);
+        if (logs) silent = `\`\`\`text\n${logs}\n\`\`\``;
+      }
+    }
     statuses.push({
       id: conversation.id,
       purpose: conversation.purpose ?? "authoring",
@@ -312,12 +338,13 @@ export async function conversationStatuses(
       review,
       note: review
         ? readNote(root, review.document) || lastAssistantText(entries)
-        : lastAssistantText(entries),
+        : silent || lastAssistantText(entries),
       result: state === "done" ? last : null,
       draft: review ? await draftOf(root, review) : null,
       progress: state === "running" ? runProgress(transcript) : [],
       reply_failed: replyFailed,
       last_words: replyFailed ? lastAssistantText(entries) : "",
+      record_missing: transcript === null ? transcriptsDir() : null,
     });
   }
   return statuses.reverse();

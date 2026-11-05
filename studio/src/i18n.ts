@@ -126,6 +126,10 @@ const zh = {
   authoring_not_installed: "没有装进项目（{name}）：{reason}。草稿已经丢弃，项目里的流程保持原样。",
   authoring_reused: "用现有的流程 {name}，没有改动；它已经放在画布上。",
   authoring_idle: "后台会话 {session} 停下了，但没有给出审核或结果。它最后说：",
+  authoring_idle_silent:
+    "后台会话 {session} 停下了，但没有给出审核或结果，也没留下任何话。在终端里运行 claude attach {session} 可以直接看它的情况。",
+  record_missing:
+    "Studio 在 Claude Code 的会话记录目录 {dir} 里没找到这个会话的记录，所以看不到它的进度和结果。如果你的 Claude Code 用 CLAUDE_CONFIG_DIR 指定了别的目录，启动 Studio 的终端里也要设成一样的。",
   authoring_gone: "后台会话 {session} 已经不在了。",
   failed_start: "没能启动后台会话：",
   trust_needed:
@@ -379,6 +383,10 @@ const en: Record<TextKey, string> = {
     "Not installed ({name}): {reason}. The draft was discarded; the project's loop is as it was.",
   authoring_reused: "Using the existing loop {name} as it is; it is on the canvas.",
   authoring_idle: "Session {session} stopped without a review or a result. Its last words:",
+  authoring_idle_silent:
+    "Session {session} stopped without a review or a result, and said nothing. Run claude attach {session} in a terminal to look at it.",
+  record_missing:
+    "The Studio found no record of this session in Claude Code's folder of transcripts, {dir}, so it cannot follow its progress or see its result. If your Claude Code uses another folder through CLAUDE_CONFIG_DIR, set the same in the terminal that starts the Studio.",
   authoring_gone: "Session {session} no longer exists.",
   failed_start: "Could not start the background session: ",
   trust_needed:

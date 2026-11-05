@@ -367,9 +367,16 @@ export function sessionControl(options: SessionOptions, root: string): SessionCo
   };
 }
 
-/** Where Claude Code keeps a session's transcript: under the user's home, by project, by session id. */
+/** Claude Code's own folder: `CLAUDE_CONFIG_DIR`, or `.claude` in the home folder. */
+export const claudeHome = (env: NodeJS.ProcessEnv = process.env): string =>
+  env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
+/** Where Claude Code keeps its sessions' transcripts, by project. */
+export const transcriptsDir = (env: NodeJS.ProcessEnv = process.env): string =>
+  path.join(claudeHome(env), "projects");
+
+/** Where Claude Code keeps a session's transcript: in its own folder, by project, by session id. */
 export function transcriptPath(root: string, sessionId: string): string | null {
-  const projects = path.join(os.homedir(), ".claude", "projects");
+  const projects = transcriptsDir();
   const named = path.join(
     projects,
     path.resolve(root).replace(/[^A-Za-z0-9]/g, "-"),
@@ -476,6 +483,67 @@ export function lastAssistantText(entries: TranscriptEntry[]): string {
     if (text) return text;
   }
   return "";
+}
+
+/**
+ * What a session last said, for a turn that ended with no loop result: its own
+ * words (an API error it could not get past is one: "API Error: ..."), or else the
+ * last API error it was retrying, or else the last tool that failed.
+ */
+export function lastWords(entries: TranscriptEntry[]): string {
+  const said = lastAssistantText(entries);
+  if (said) return said;
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]!;
+    if (entry.type === "system" && entry.subtype === "api_error" && isRecord(entry.error)) {
+      const text = entry.error.formatted ?? entry.error.message;
+      if (typeof text === "string" && text.trim()) return `API Error: ${text.trim()}`;
+    }
+    const content = isRecord(entry.message) ? entry.message.content : null;
+    if (entry.type === "user" && Array.isArray(content))
+      for (const part of content)
+        if (isRecord(part) && part.type === "tool_result" && part.is_error === true) {
+          const text =
+            typeof part.content === "string"
+              ? part.content
+              : Array.isArray(part.content)
+                ? part.content
+                    .filter((item) => isRecord(item) && typeof item.text === "string")
+                    .map((item) => (item as { text: string }).text)
+                    .join("\n")
+                : "";
+          if (text.trim()) return text.trim().slice(0, 4000);
+        }
+  }
+  return "";
+}
+
+/** A terminal's control sequences (window titles, colours and cursor moves, the rest), which are not words. */
+const ESC = String.fromCharCode(27);
+const BEL = String.fromCharCode(7);
+const TERMINAL_CODES = [
+  new RegExp(`${ESC}\\][^${BEL}${ESC}]*(?:${BEL}|${ESC}\\\\)`, "g"),
+  new RegExp(`${ESC}\\[[0-9;?]*[ -/]*[@-~]`, "g"),
+  new RegExp(`${ESC}[@-_]`, "g"),
+];
+
+/** What a background session last printed in its terminal, as `claude logs` shows it: the last lines, plain. */
+export async function sessionLogs(
+  options: SessionOptions,
+  root: string,
+  session: BackgroundSession,
+): Promise<string> {
+  const reply = await runClaude([...options.claude_command, "logs", session.id], root);
+  if (!reply.ok) return "";
+  let plain = reply.stdout;
+  for (const code of TERMINAL_CODES) plain = plain.replace(code, "");
+  return plain
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim())
+    .slice(-25)
+    .join("\n");
 }
 
 export interface StepProgress {

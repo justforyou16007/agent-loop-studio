@@ -179,6 +179,8 @@ export interface AuthoringStatus {
   reply_failed: boolean;
   /** What the session said about it. */
   last_words: string;
+  /** Claude Code's folder of transcripts, when this session's transcript is not in it: its progress cannot be followed. */
+  record_missing: string | null;
 }
 
 /** The workspace's projects and the reference projects a new one can start from. */

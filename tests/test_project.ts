@@ -128,6 +128,7 @@ const [command, ...rest] = process.argv.slice(2);
 if (command === "agents") process.stdout.write(fs.readFileSync(${JSON.stringify(agentsFile)}, "utf8"));
 else if (command === "stop") fs.appendFileSync(${JSON.stringify(stoppedFile)}, rest[0] + "\\n");
 // What Claude Code says when it is asked for a background session in a folder nobody told it to trust.
+else if (command === "logs") process.stdout.write("\\u001b[31mthe session's last terminal line\\u001b[0m\\n");
 else if (command === "--bg") { process.stderr.write("Workspace not trusted. Run \`claude\` in " + process.cwd() + " once and accept the trust prompt, then retry.\\n"); process.exit(1); }
 else { process.stderr.write("not stood in for: " + command); process.exit(1); }
 `,
@@ -313,6 +314,34 @@ else { process.stderr.write("not stood in for: " + command); process.exit(1); }
     fs.writeFileSync(claudeJson, JSON.stringify(config, null, 2));
     await request(at("api/run"), { cookie, method: "POST", body: { name: "setup" } });
     assert.ok(trustedIn(workspace));
+
+    // A session that stopped with no result: the chat gets its last words, from its terminal while the Studio has
+    // no transcript of it (and is told where it looked), then from the transcript, an API error included.
+    const minuteAgo = new Date(Date.now() - 60_000).toISOString();
+    fs.mkdirSync(path.join(first, ".contrejour/studio"), { recursive: true });
+    fs.writeFileSync(
+      path.join(first, ".contrejour/studio/conversations.json"),
+      JSON.stringify({ schema_version: 1, conversations: [{ id: "c9", loop: "setup", base: null, session: { id: "idle01", session_id: "sess-idle", name: "run" }, started_at: minuteAgo, sent: [{ text: "Run the setup loop.", at: minuteAgo }] }] }),
+    );
+    fs.writeFileSync(agentsFile, JSON.stringify([{ id: "idle01", sessionId: "sess-idle", status: "done" }]));
+    const statusOf = async () => JSON.parse((await request(at("api/authoring"), { cookie })).body).conversations.find((entry: { id: string }) => entry.id === "c9");
+    let silent = await statusOf();
+    assert.equal(silent.state, "idle");
+    assert.equal(silent.note, "```text\nthe session's last terminal line\n```", "its terminal, without the colours");
+    assert.equal(silent.record_missing, path.join(claudeConfig, "projects"), "where Claude Code keeps transcripts: its own folder, CLAUDE_CONFIG_DIR");
+    const transcriptFolder = path.join(claudeConfig, "projects", first.replace(/[^A-Za-z0-9]/g, "-"));
+    fs.mkdirSync(transcriptFolder, { recursive: true });
+    fs.writeFileSync(
+      path.join(transcriptFolder, "sess-idle.jsonl"),
+      [
+        { type: "user", message: { role: "user", content: "Run the setup loop." } },
+        { type: "system", subtype: "api_error", error: { message: "Request timed out.", formatted: "Request timed out." }, retryAttempt: 1, maxRetries: 10 },
+        { type: "assistant", isApiErrorMessage: true, message: { role: "assistant", content: [{ type: "text", text: "API Error: 400 reasoning effort must be low, high, xhigh, max or an integer" }] } },
+      ].map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+    );
+    silent = await statusOf();
+    assert.deepEqual([silent.note, silent.record_missing], ["API Error: 400 reasoning effort must be low, high, xhigh, max or an integer", null]);
+    fs.rmSync(path.join(first, ".contrejour/studio/conversations.json"));
     const store = path.join(first, ".contrejour/studio/conversations.json");
     assert.equal(fs.existsSync(store) ? read(store).conversations.length : 0, 0, "no conversation is recorded for a session that never started");
   } finally {
@@ -371,6 +400,11 @@ else { process.stderr.write("not stood in for: " + command); process.exit(1); }
   };
   assert.match(describeRequest("loop-authoring", { name: "iterate-and-check", source: "project" }, "Add a review", []), /looking at the loop `iterate-and-check`.*unless they ask for another loop: Add a review/);
   assert.match(describeRequest("role-authoring", { name: "planner", source: "project" }, "Plan less", []), /^Change the existing role `planner`/);
+  // A turn that ended with no result: its last words are an API error it was retrying, or a tool that failed.
+  const { lastWords } = (await import(pathToFileURL(path.join(source, "dist/tools/sessions.js")).href)) as { lastWords(entries: Record<string, unknown>[]): string };
+  assert.equal(lastWords([{ type: "system", subtype: "api_error", error: { message: "Connection error.", formatted: "Connection dropped (ECONNRESET)" } }]), "API Error: Connection dropped (ECONNRESET)");
+  assert.equal(lastWords([{ type: "user", message: { content: [{ type: "tool_result", is_error: true, content: "Workflow failed: no loop setup" }] } }]), "Workflow failed: no loop setup");
+  assert.equal(lastWords([]), "");
   // Claude Code's command on Windows, where a program on PATH starts only as an .exe: as a shell finds it, never through cmd.exe.
   const { launchCommand } = (await import(pathToFileURL(path.join(source, "dist/tools/sessions.js")).href)) as {
     launchCommand(argv: string[], platform?: string, env?: Record<string, string>): { file: string; args: string[]; env: Record<string, string> };
