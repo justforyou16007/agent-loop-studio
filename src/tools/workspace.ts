@@ -315,10 +315,9 @@ function installerReport(stdout: string): Record<string, unknown> | null {
 /**
  * Bring a project up to the library checkout it was installed from, once that
  * has moved on: its runtime, and the framework's loops and roles it still has as
- * installed; runtime files the framework no longer ships (an older framework's
- * copy of the Studio, say) are removed. The installer leaves the project's own
- * alone (what it changed, what its example gave). A dry run comes first, so a
- * project already current is not touched at all.
+ * installed. The installer leaves the project's own alone (what it changed, what
+ * its example gave). A dry run comes first, so a project already current is not
+ * touched at all.
  */
 export function updateInstallation(projectRoot: string): InstallationUpdate {
   const root = path.resolve(projectRoot);
@@ -346,11 +345,8 @@ export function updateInstallation(projectRoot: string): InstallationUpdate {
       .join(" ");
   const dry = run(true);
   if (dry.status !== 0) return { written: [], problem: why(dry) };
-  const report = installerReport(dry.stdout);
-  const changes = [report?.written, report?.removed].flatMap((list) =>
-    Array.isArray(list) ? list : [],
-  );
-  if (!changes.length) return { written: [], problem: null };
+  const planned = installerReport(dry.stdout)?.written;
+  if (!Array.isArray(planned) || planned.length === 0) return { written: [], problem: null };
   const done = run(false);
   if (done.status !== 0) return { written: [], problem: why(done) };
   const written = installerReport(done.stdout)?.written;

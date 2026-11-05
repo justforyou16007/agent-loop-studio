@@ -8,7 +8,6 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -282,16 +281,6 @@ try {
     const current = JSON.parse((await request(at("api/projects/open"), { cookie, method: "POST", body: { name: "first" } })).body);
     assert.deepEqual(current.update, { written: [], problem: null });
     assert.equal(fs.statSync(path.join(first, ".claude/settings.json")).mtimeMs, settingsBefore, "a current project is not reinstalled");
-    // A copy of the Studio an older framework installed goes when the project is opened, with nothing else to write.
-    const oldStudio = path.join(first, ".contrejour/dist/tools/studio.js");
-    fs.writeFileSync(oldStudio, "an older framework's Studio\n");
-    const installRecord = read(path.join(first, ".contrejour/install.json"));
-    installRecord.files[".contrejour/dist/tools/studio.js"] = crypto.createHash("sha256").update(fs.readFileSync(oldStudio)).digest("hex");
-    fs.writeFileSync(path.join(first, ".contrejour/install.json"), JSON.stringify(installRecord, null, 2));
-    const cleared = JSON.parse((await request(at("api/projects/open"), { cookie, method: "POST", body: { name: "first" } })).body);
-    assert.deepEqual(cleared.update, { written: [], problem: null });
-    assert.equal(fs.existsSync(oldStudio), false);
-    assert.equal(read(path.join(first, ".contrejour/install.json")).files[".contrejour/dist/tools/studio.js"], undefined);
 
     // The folders to choose a workspace from: full paths only.
     const listing = JSON.parse((await request(at(`api/projects/folders?path=${encodeURIComponent(workspace)}`), { cookie })).body);
