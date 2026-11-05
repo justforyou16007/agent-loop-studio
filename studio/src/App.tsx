@@ -21,6 +21,7 @@ import { api } from "./api.js";
 import { Inspector } from "./canvas/Inspector.js";
 import { FlowCanvas, focusedIds, pointablesOf } from "./canvas/FlowCanvas.js";
 import { ChatPanel } from "./chat/ChatPanel.js";
+import { followSessions } from "./chat/live.js";
 import { LangContext, translate, useLang, type Lang, type TextKey } from "./i18n.js";
 import { ParamsDialog, RoleDraftDialog, RunDialog } from "./dialogs.js";
 import { DefinitionDialog, PreviewDialog, type LoopRef } from "./PreviewDialog.js";
@@ -85,6 +86,8 @@ function updatedList(
     .filter(Boolean)
     .join(t("list_parts"));
 }
+/** How a conversation stands when the owner's next message goes to its session. */
+const CONTINUES: ReadonlySet<AuthoringStatus["state"]> = new Set(["waiting", "idle", "stopped"]);
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -130,32 +133,9 @@ export function App() {
     setMessages((current) => [...current, { ...message, id }]);
     return id;
   }, []);
-  /**
-   * A background session that could not start. When Claude Code does not trust
-   * the project's folder yet, the chat shows what to do once for the project, and
-   * a button that tries again, once.
-   */
-  const startFailed = (reason: unknown, again?: () => void) => {
-    const error = reason as Error & { code?: string; location?: string; detail?: string };
-    if (error.code !== "WORKSPACE_NOT_TRUSTED") {
-      say({ from: "studio", text: t("failed_start") + error.message });
-      return;
-    }
-    let id = 0;
-    const retry = again
-      ? () => {
-          setMessages((now) =>
-            now.map((entry) => (entry.id === id ? { ...entry, retry: undefined } : entry)),
-          );
-          again();
-        }
-      : undefined;
-    id = say({
-      from: "studio",
-      key: "trust_needed",
-      trust: { folder: error.location || overview?.project.root || "", detail: error.detail },
-      retry,
-    });
+  /** A session that could not start, in Claude Code's words. */
+  const startFailed = (reason: unknown) => {
+    say({ from: "studio", text: t("failed_start") + (reason as Error).message });
   };
   const replace = useCallback((id: number, message: Omit<ChatMessage, "id">) => {
     setMessages((current) =>
@@ -213,19 +193,20 @@ export function App() {
             key: "project_updated",
             values: { list: updatedList(update.written, t) },
           });
-        // A change still going on in the background is picked up where it is.
+        // A conversation still going on is picked up where it is; else the latest, if a message can
+        // still continue it.
         void api
           .conversations()
           .then(({ conversations }) => {
-            const open = conversations.find((entry) =>
-              ["running", "waiting"].includes(entry.state),
-            );
+            const latest = conversations[0];
+            const open =
+              conversations.find((entry) => ["running", "waiting"].includes(entry.state)) ??
+              (latest && CONTINUES.has(latest.state) ? latest : undefined);
             if (!open) return;
             setConversation(open.id);
             pendingMessage.current = say({
               from: "studio",
               key: "session_resumed",
-              values: { session: open.session },
               session: open.id,
               status: open,
             });
@@ -316,7 +297,7 @@ export function App() {
   const change = async (text: string, pointed: Reference[]) => {
     setBusy(true);
     try {
-      if (conversation && status?.state === "waiting") {
+      if (conversation && status && CONTINUES.has(status.state)) {
         // Shown in the session as it is sent, until its transcript has it.
         const sentAt = new Date().toISOString();
         const sessionMessage = pendingMessage.current;
@@ -328,7 +309,19 @@ export function App() {
                 : entry,
             ),
           );
-        await api.answer(conversation, text, pointed);
+        try {
+          await api.answer(conversation, text, pointed);
+        } catch (reason) {
+          // It did not go: not shown as being sent any longer.
+          setMessages((current) =>
+            current.map((entry) =>
+              entry.id === sessionMessage
+                ? { ...entry, replies: entry.replies?.filter((reply) => reply.at !== sentAt) }
+                : entry,
+            ),
+          );
+          throw reason;
+        }
         setStatus({ ...status, state: "running", review: null });
       } else if (roleTarget) {
         const started = await api.startAuthoring({
@@ -345,7 +338,7 @@ export function App() {
         pendingMessage.current = say({
           from: "studio",
           key: roleTarget.name ? "role_started" : "role_new_started",
-          values: { role: roleTarget.name ?? "", session: started.session },
+          values: { role: roleTarget.name ?? "" },
           session: started.id,
         });
       } else {
@@ -361,12 +354,12 @@ export function App() {
         pendingMessage.current = say({
           from: "studio",
           key: flow ? "authoring_started" : "authoring_new",
-          values: { loop: flow?.loop.name ?? "", session: started.session },
+          values: { loop: flow?.loop.name ?? "" },
           session: started.id,
         });
       }
     } catch (reason) {
-      startFailed(reason, () => void change(text, pointed));
+      startFailed(reason);
     } finally {
       setBusy(false);
     }
@@ -385,11 +378,18 @@ export function App() {
       setQueued({ text, pointed });
       return;
     }
-    // A reply to the session that waits is shown in its conversation, not again here.
-    const reply = Boolean(conversation && status?.state === "waiting");
+    // A message to the session that waits or could continue is shown in its conversation, not again here.
+    const reply = Boolean(conversation && status && CONTINUES.has(status.state));
     if (!reply) say({ from: "owner", text, references: pointed });
     if (reply || flow || roleTarget) await change(text, pointed);
     else if (text) await find(text);
+  };
+  /** The next message starts a conversation of its own, rather than continuing this one. */
+  const leaveConversation = () => {
+    setConversation(null);
+    setStatus(null);
+    pendingMessage.current = null;
+    handled.current = "";
   };
   /** Stop the session where it is; a reply continues it later. */
   const stopSession = async () => {
@@ -408,12 +408,16 @@ export function App() {
     void send(next.text, next.pointed);
   }, [queued, conversation, status?.state]);
 
-  // Follow the conversation: often while its loop works, now and then while it waits.
+  // Follow the conversation: read at once when its session changes state, and again a moment later
+  // for what it recorded on the way; often while its loop works, now and then while it waits.
   useEffect(() => {
     if (!conversation) return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
+    let again: ReturnType<typeof setTimeout>;
+    let sessionState: string | null = null;
     const poll = async () => {
+      clearTimeout(timer);
       try {
         const found = (await api.conversations()).conversations.find(
           (entry) => entry.id === conversation,
@@ -427,9 +431,18 @@ export function App() {
       }
     };
     void poll();
+    const unfollow = followSessions((event) => {
+      if (event.id !== conversation || event.state === sessionState) return;
+      sessionState = event.state;
+      void poll();
+      clearTimeout(again);
+      again = setTimeout(() => void poll(), 400);
+    });
     return () => {
       stopped = true;
       clearTimeout(timer);
+      clearTimeout(again);
+      unfollow();
     };
   }, [conversation, status?.state === "running"]);
 
@@ -451,6 +464,11 @@ export function App() {
     if (handled.current === key) return;
     handled.current = key;
     setShowOriginal(false);
+    // Nothing can continue it: the next message starts another.
+    if (status.state === "gone") {
+      pendingMessage.current = null;
+      setConversation(null);
+    }
     if (status.state === "done") {
       pendingMessage.current = null;
       // The canvas shows what came of it: the loop installed or chosen as it is, or the one changed.
@@ -492,11 +510,11 @@ export function App() {
       pendingMessage.current = say({
         from: "studio",
         key: "run_launched",
-        values: { loop: flow.loop.name, session: started.session },
+        values: { loop: flow.loop.name },
         session: started.id,
       });
     } catch (reason) {
-      startFailed(reason, () => void runIt());
+      startFailed(reason);
     }
   };
   /** The whole project, published to the community library: the publish loop puts exactly what leaves to the owner first. */
@@ -510,11 +528,10 @@ export function App() {
       pendingMessage.current = say({
         from: "studio",
         key: "publish_launched",
-        values: { session: started.session },
         session: started.id,
       });
     } catch (reason) {
-      startFailed(reason, () => void publishIt());
+      startFailed(reason);
     }
   };
   /** The loop on the canvas, tried the way it will run: loop-trial asks in the chat whether it serves the goal. */
@@ -528,11 +545,11 @@ export function App() {
       pendingMessage.current = say({
         from: "studio",
         key: "trial_launched",
-        values: { loop: flow.loop.name, session: started.session },
+        values: { loop: flow.loop.name },
         session: started.id,
       });
     } catch (reason) {
-      startFailed(reason, () => void tryIt());
+      startFailed(reason);
     }
   };
   const editRole = (name: string | null, source = "project") => {
@@ -737,9 +754,11 @@ export function App() {
                     onClearTarget={() => setRoleTarget(null)}
                     onViewFiles={setRoleDraft}
                     waiting={status?.state === "waiting"}
+                    continuing={Boolean(conversation && status && CONTINUES.has(status.state))}
                     conversation={conversation}
                     running={Boolean(conversation && status?.state === "running")}
                     onStop={stopSession}
+                    onNewConversation={leaveConversation}
                     queued={queued?.text ?? null}
                     onUnqueue={() => setQueued(null)}
                     names={names}

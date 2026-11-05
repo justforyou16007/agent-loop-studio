@@ -113,9 +113,11 @@ interface CanvasProps {
 }
 
 export function FlowCanvas(props: CanvasProps) {
+  // Another loop, or the same one changed (a draft installed, say), is laid out afresh: the boxes are made once.
+  const version = useMemo(() => JSON.stringify(props.flow), [props.flow]);
   return (
     <ReactFlowProvider>
-      <Canvas key={`${props.flow.loop.source}:${props.flow.loop.name}`} {...props} />
+      <Canvas key={version} {...props} />
     </ReactFlowProvider>
   );
 }

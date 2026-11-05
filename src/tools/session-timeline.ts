@@ -1,5 +1,5 @@
 /**
- * A background session's conversation, as the Studio's chat shows it, read from
+ * A session's conversation, as the Studio's chat shows it, read from
  * the transcript Claude Code keeps of it: what the Studio asked, what the owner
  * said, what the session said, each tool it called as one row whose status
  * follows its result, the loops it ran with their roles, API errors, and where
@@ -20,7 +20,7 @@ import type {
   ToolDetail,
   ToolKind,
 } from "./studio-types.js";
-import type { TranscriptEntry } from "./sessions.js";
+import type { TranscriptEntry } from "./session-record.js";
 import { isRecord } from "./validate.js";
 
 /** What a long text keeps for the chat: a tool's output, a file's content. */
@@ -70,7 +70,10 @@ export function transcriptEntries(file: string | null): TranscriptEntry[] {
       fs.closeSync(fd);
     }
   }
+  read.delete(file);
   read.set(file, known);
+  // A Studio that stays up reads many a transcript in time: the ones read longest ago go, and are read again if asked for.
+  if (read.size > 24) read.delete(read.keys().next().value!);
   return known.entries;
 }
 
@@ -451,10 +454,11 @@ export function sessionTimeline(
   root: string,
   missing: string,
 ): SessionTimeline {
-  if (!transcript) return { items: [], record_missing: missing };
+  if (!transcript) return { items: [], record_missing: missing, streaming: "" };
   return {
     items: timelineOf(transcriptEntries(transcript), { root, transcript }),
     record_missing: null,
+    streaming: "",
   };
 }
 
@@ -466,7 +470,7 @@ export function roleTimeline(
   root: string,
 ): SessionTimeline {
   if (!transcript || !/^[A-Za-z0-9_-]+$/.test(run) || !/^[A-Za-z0-9_-]+$/.test(agent))
-    return { items: [], record_missing: null };
+    return { items: [], record_missing: null, streaming: "" };
   const file = path.join(
     transcript.replace(/\.jsonl$/, ""),
     "subagents",
@@ -474,7 +478,11 @@ export function roleTimeline(
     run,
     `agent-${agent}.jsonl`,
   );
-  return { items: timelineOf(transcriptEntries(file), { root }), record_missing: null };
+  return {
+    items: timelineOf(transcriptEntries(file), { root }),
+    record_missing: null,
+    streaming: "",
+  };
 }
 
 /** One tool call in full: its command and output, its diff, the file it wrote, or its input and output. */

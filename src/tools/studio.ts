@@ -18,10 +18,9 @@ import { fileURLToPath } from "node:url";
 import { createCli, runCli } from "../lib/cli.js";
 import { flowOf, searchLoops, summarize } from "./flow.js";
 import { collectView, fingerprint, type ViewData } from "./loop-view.js";
-import type { SessionOptions } from "./sessions.js";
+import { SessionHost, type HostOptions, type LiveSession } from "./agent-sessions.js";
 import { COMMUNITY_LIBRARY, COMMUNITY_URL, installedLibrary, isProject } from "./installation.js";
 import { useLoop } from "./project-loop.js";
-import { trustFolders } from "./claude-trust.js";
 import { writeStateJsonAtomic } from "./state-file.js";
 import {
   copyProject,
@@ -36,6 +35,7 @@ import {
   conversationStatuses,
   conversationTimeline,
   conversationTool,
+  hasConversation,
   releaseSessions,
   stopConversation,
   runLoop,
@@ -46,12 +46,13 @@ import {
 } from "./studio-authoring.js";
 import type {
   FolderListing,
+  LiveEvent,
   LoopDetail,
   Overview,
   ProjectsInfo,
   RoleDetail,
 } from "./studio-types.js";
-import { A1Error, isRecord } from "./validate.js";
+import { isRecord } from "./validate.js";
 
 const ASSETS = fileURLToPath(new URL("../studio/", import.meta.url));
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1"]);
@@ -226,7 +227,8 @@ export async function serveStudio(
     host?: string;
     port?: number;
     assets?: string;
-    session?: Partial<SessionOptions>;
+    /** How the sessions the Studio starts run. */
+    session?: Partial<HostOptions>;
     /** A folder of projects the owner switches between, starts and copies; `projectRoot` may then be empty. */
     workspace?: string;
     /** The library checkout new projects are installed from, when no project names one. */
@@ -249,33 +251,6 @@ export async function serveStudio(
       ? path.dirname(root)
       : "";
   let recent = readRemembered(options.settings).recent;
-  /** Why Claude Code's trust could not be recorded for a folder, the last time: the page shows it with the steps. */
-  const trustProblems = new Map<string, string>();
-  /** Claude Code's trust in these folders, recorded as the owner decided for their workspace. */
-  const trust = async (folders: string[]): Promise<void> => {
-    try {
-      const outcome = await trustFolders(folders);
-      for (const folder of [...outcome.trusted, ...outcome.already]) trustProblems.delete(folder);
-      for (const entry of outcome.skipped) trustProblems.set(entry.folder, entry.reason);
-    } catch (error) {
-      for (const folder of folders)
-        trustProblems.set(path.resolve(folder), (error as Error).message);
-    }
-  };
-  /** The workspace the owner chose, and every project in it, trusted: each project is a repository of its own. */
-  const trustWorkspace = (): Promise<void> =>
-    workspace
-      ? trust([workspace, ...listProjects(workspace).map((project) => project.root)])
-      : Promise.resolve();
-  /**
-   * Before a loop starts in a project of the workspace: one put there by other
-   * means is trusted too, and the workspace with it when it could not be before
-   * (Claude Code had not run on this machine yet, say).
-   */
-  const trustOpen = (): Promise<void> =>
-    root && workspace && path.dirname(root) === workspace
-      ? trust([workspace, root])
-      : Promise.resolve();
   const host = options.host ?? "127.0.0.1";
   if (!LOOPBACK.has(host))
     throw new Error(
@@ -287,12 +262,11 @@ export async function serveStudio(
       `the Studio page is missing (${assets}); build the Contrejour checkout (npm run build) and reinstall`,
     );
 
-  // Authoring sessions run unattended, so they need a mode that does not wait for approvals.
-  const sessionOptions: SessionOptions = {
-    claude_command: options.session?.claude_command ?? ["claude"],
-    permission_mode: options.session?.permission_mode ?? "bypassPermissions",
-    model: options.session?.model ?? null,
-  };
+  // Sessions run unattended, so they need a mode that does not wait for approvals.
+  const agents = new SessionHost({
+    permissionMode: "bypassPermissions",
+    ...options.session,
+  });
   let loginToken: string | null = crypto.randomBytes(24).toString("base64url");
   const sessions = new Set<string>();
   let cache: { key: string; data: Promise<ViewData> } | null = null;
@@ -314,6 +288,11 @@ export async function serveStudio(
     head: boolean,
     response: http.ServerResponse,
   ): Promise<void> {
+    // The sessions as they go, wherever they run: the page stays connected across projects.
+    if (url.pathname === "/api/events")
+      return request.method === "GET"
+        ? sessionEvents(response)
+        : json(response, 405, { error: "GET only" }, head);
     // A project deleted or broken outside the Studio is no longer open.
     if (root && !isProject(root)) {
       root = "";
@@ -335,9 +314,8 @@ export async function serveStudio(
         return json(response, 409, {
           error: "this project has no loop-trial loop: update its installation",
         });
-      await trustOpen();
-      const conversation = await trialLoop(root, sessionOptions, name, goal);
-      return json(response, 200, { id: conversation.id, session: conversation.session.id });
+      const conversation = await trialLoop(root, agents, name, goal);
+      return json(response, 200, { id: conversation.id });
     }
     if (url.pathname === "/api/use" || url.pathname === "/api/run") {
       if (request.method !== "POST") return json(response, 405, { error: "POST only" });
@@ -356,9 +334,8 @@ export async function serveStudio(
       }
       if (!(await view()).loops.some((loop) => loop.name === name && loop.source === "project"))
         return json(response, 404, { error: `this project has no loop ${name}` });
-      await trustOpen();
-      const conversation = await runLoop(root, sessionOptions, name);
-      return json(response, 200, { id: conversation.id, session: conversation.session.id });
+      const conversation = await runLoop(root, agents, name);
+      return json(response, 200, { id: conversation.id });
     }
     const data = await view();
     const name = url.searchParams.get("name") ?? "";
@@ -497,7 +474,6 @@ export async function serveStudio(
       workspace = where;
       if (root && path.dirname(root) !== workspace) root = "";
       cache = null;
-      await trustWorkspace();
       if (options.settings)
         try {
           writeStateJsonAtomic(options.settings, { workspace, recent });
@@ -516,17 +492,10 @@ export async function serveStudio(
         return json(response, 400, {
           error: `${found.root} is a link to a folder elsewhere: remove it by hand`,
         });
-      let working: string[];
-      try {
-        working = await releaseSessions(found.root, sessionOptions);
-      } catch (error) {
-        return json(response, 502, {
-          error: `could not ask Claude Code whether a loop still works in ${name}: ${(error as Error).message}`,
-        });
-      }
+      const working = await releaseSessions(found.root, agents);
       if (working.length)
         return json(response, 409, {
-          error: `a loop is still working in ${name} (session ${working.join(", ")}): wait until it stops, then delete the project`,
+          error: `a loop is still working in ${name} (conversation ${working.join(", ")}): wait until it stops, or stop it, then delete the project`,
         });
       fs.rmSync(found.root, { recursive: true, force: true, maxRetries: 3 });
       if (root === path.resolve(found.root)) root = "";
@@ -547,17 +516,52 @@ export async function serveStudio(
         const reference =
           typeof body.reference === "string" && body.reference ? body.reference : null;
         root = createProject(workspace, name, { library, reference }).root;
-        await trust([root]);
       } else if (url.pathname === "/api/projects/copy") {
         const from = typeof body.from === "string" ? body.from : "";
         root = copyProject(workspace, from, name).root;
-        await trust([root]);
       } else return json(response, 404, { error: "not found" });
     } catch (error) {
       return json(response, 400, { error: (error as Error).message });
     }
     cache = null;
     return json(response, 200, { current: path.basename(root), ...(update ? { update } : {}) });
+  }
+
+  /**
+   * The sessions as they change, to one page: how each stands, and the words it is
+   * writing. Changes that come fast go together, a few each second, each session's
+   * latest; every session the Studio runs is sent once as the page connects.
+   */
+  function sessionEvents(response: http.ServerResponse): void {
+    response.writeHead(200, { ...SECURITY, "content-type": "text/event-stream; charset=utf-8" });
+    const changed = new Map<string, LiveSession>();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const flush = () => {
+      timer = null;
+      for (const live of changed.values()) {
+        const event: LiveEvent = {
+          id: live.key,
+          state: live.state,
+          steps: live.steps,
+          streaming: live.streaming,
+        };
+        response.write(`data: ${JSON.stringify(event)}\n\n`);
+      }
+      changed.clear();
+    };
+    const note = (live: LiveSession) => {
+      changed.set(live.key, live);
+      timer ??= setTimeout(flush, 80);
+    };
+    const unfollow = agents.subscribe(note);
+    agents.all().forEach(note);
+    // A line now and then: what sits between the page and here, and the page itself, know it is alive.
+    const heartbeat = setInterval(() => response.write(": alive\n\n"), 25_000);
+    response.on("close", () => {
+      unfollow();
+      clearInterval(heartbeat);
+      if (timer) clearTimeout(timer);
+    });
   }
 
   /** The chat's conversations with the authoring loops: start one, answer it, see how they stand. */
@@ -574,7 +578,7 @@ export async function serveStudio(
       const role = run && agent ? { run, agent } : null;
       // A conversation as the chat shows it, row by row; or one role of a loop it ran.
       if (url.pathname === "/api/authoring/timeline") {
-        const timeline = conversationTimeline(root, id, role);
+        const timeline = conversationTimeline(root, agents, id, role);
         return timeline
           ? json(response, 200, timeline, head)
           : json(response, 404, { error: `no conversation ${id}` }, head);
@@ -588,12 +592,7 @@ export async function serveStudio(
       }
       if (url.pathname !== "/api/authoring")
         return json(response, 404, { error: "not found" }, head);
-      return json(
-        response,
-        200,
-        { conversations: await conversationStatuses(root, sessionOptions) },
-        head,
-      );
+      return json(response, 200, { conversations: await conversationStatuses(root, agents) }, head);
     }
     const body = await readBody(request);
     const text = typeof body.text === "string" ? body.text.trim() : "";
@@ -608,32 +607,30 @@ export async function serveStudio(
           ? { name: body.base.name, source: body.base.source }
           : null;
       if (!text) return json(response, 400, { error: "say what you want" });
-      await trustOpen();
-      const conversation = await startConversation(root, sessionOptions, {
+      const conversation = await startConversation(root, agents, {
         loop,
         base,
         text,
         pointers,
       });
-      return json(response, 200, { id: conversation.id, session: conversation.session.id });
+      return json(response, 200, { id: conversation.id });
     }
     if (url.pathname === "/api/authoring/stop") {
       if (typeof body.id !== "string") return json(response, 400, { error: "which conversation" });
-      await stopConversation(root, sessionOptions, body.id);
+      await stopConversation(root, agents, body.id);
       return json(response, 200, { stopped: body.id });
     }
     if (url.pathname === "/api/authoring/answer") {
       if (typeof body.id !== "string") return json(response, 400, { error: "which conversation" });
       if (!text && !pointers.length) return json(response, 400, { error: "the reply is empty" });
-      if (!(await conversationStatuses(root, sessionOptions)).some((entry) => entry.id === body.id))
+      if (!hasConversation(root, body.id))
         return json(response, 404, { error: `no conversation ${body.id}` });
-      await trustOpen();
-      const conversation = await answerConversation(root, sessionOptions, {
+      const conversation = await answerConversation(root, agents, {
         id: body.id,
         text,
         pointers,
       });
-      return json(response, 200, { id: conversation.id, session: conversation.session.id });
+      return json(response, 200, { id: conversation.id });
     }
     return json(response, 404, { error: "not found" });
   }
@@ -715,18 +712,7 @@ export async function serveStudio(
         await api(request, url, head, response);
       } catch (error) {
         cache = null;
-        // The helpers' code goes along, so the page can say what to do (a folder Claude Code does not trust yet, say).
-        const coded =
-          error instanceof A1Error ? { code: error.code, location: error.location } : {};
-        const untrusted = coded.code === "WORKSPACE_NOT_TRUSTED";
-        // And, for a folder Claude Code does not trust, why the Studio could not record its trust.
-        const detail = untrusted ? (trustProblems.get(coded.location ?? "") ?? null) : null;
-        json(
-          response,
-          untrusted ? 409 : 500,
-          { error: (error as Error).message, ...coded, ...(untrusted ? { detail } : {}) },
-          head,
-        );
+        json(response, 500, { error: (error as Error).message }, head);
       }
       return;
     }
@@ -753,8 +739,6 @@ export async function serveStudio(
     file(url.pathname, head, response);
   }
 
-  // The workspace the Studio starts with is trusted, as one the owner switches to is.
-  await trustWorkspace();
   const server = http.createServer((request, response) => {
     void handle(request, response).catch((error: unknown) => {
       if (!response.headersSent) json(response, 500, { error: (error as Error).message });
@@ -773,11 +757,14 @@ export async function serveStudio(
     url,
     loginUrl: `${url}auth?t=${loginToken}`,
     update: startUpdate,
-    close: () =>
-      new Promise<void>((resolve) => {
+    // Its sessions end with it; a message continues each later, from its transcript.
+    close: async () => {
+      await agents.closeAll();
+      await new Promise<void>((resolve) => {
         server.closeAllConnections();
         server.close(() => resolve());
-      }),
+      });
+    },
   };
 }
 
@@ -822,13 +809,16 @@ function cli(): void {
       "127.0.0.1",
     )
     .option("--port <port>", "port to listen on", "8790")
-    .option("--claude <command>", "the Claude Code command the authoring sessions run", "claude")
+    .option(
+      "--claude <path>",
+      "the Claude Code executable the sessions run (default: the one the Claude Agent SDK brings, which matches it)",
+    )
     .option(
       "--permission-mode <mode>",
-      "permission mode of the unattended authoring sessions: bypassPermissions or auto",
+      "permission mode of the unattended sessions: bypassPermissions or auto",
       "bypassPermissions",
     )
-    .option("--model <model>", "model of the authoring sessions (default: Claude Code's)")
+    .option("--model <model>", "model of the sessions (default: Claude Code's)")
     .action(
       async (options: {
         project?: string;
@@ -836,7 +826,7 @@ function cli(): void {
         library?: string;
         host: string;
         port: string;
-        claude: string;
+        claude?: string;
         permissionMode: string;
         model?: string;
       }) => {
@@ -869,11 +859,17 @@ function cli(): void {
             host: options.host,
             port,
             session: {
-              claude_command: [options.claude],
-              permission_mode: options.permissionMode,
+              executable: options.claude ?? null,
+              permissionMode: options.permissionMode as HostOptions["permissionMode"],
               model: options.model ?? null,
             },
           });
+          // Ctrl+C: the sessions end with the Studio rather than linger, however long they take to go.
+          for (const signal of ["SIGINT", "SIGTERM"] as const)
+            process.once(signal, () => {
+              setTimeout(() => process.exit(0), 5000).unref();
+              void studio.close().finally(() => process.exit(0));
+            });
           console.log(
             [
               `Agent Loop Studio for ${options.project ? path.basename(path.resolve(options.project)) : path.resolve(workspace!)} is running (Ctrl+C stops it).`,

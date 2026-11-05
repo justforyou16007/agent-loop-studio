@@ -1,8 +1,8 @@
 /**
  * The Studio's conversations with the authoring loops. What the owner asks for
- * in the chat starts `loop-authoring` (or `role-authoring`) in a background
- * session that runs as the project's task manager, the role that runs loops and
- * relays the owner's answers. Where the loop stops for the owner, the Studio
+ * in the chat starts `loop-authoring` (or `role-authoring`) in a session that
+ * runs as the project's task manager, the role that runs loops and relays the
+ * owner's answers. Where the loop stops for the owner, the Studio
  * shows its review note and the draft on the canvas; the owner's reply, exactly
  * as the Studio sends it, goes back to the session, which passes it to the loop
  * unchanged. The Studio itself decides nothing: the loop's roles do the work,
@@ -11,28 +11,18 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { SessionHost } from "./agent-sessions.js";
 import { flowOf } from "./flow.js";
 import { entryRoleOf } from "./installation.js";
 import { collectDraftView } from "./loop-view.js";
 import {
   lastAssistantText,
-  lastWords,
-  listSessions,
   loopResults,
   ownerWait,
-  readTranscript,
-  runClaude,
   runProgress,
-  sessionControl,
-  sessionLogs,
-  sessionState,
-  startSession,
-  stopArgv,
   transcriptPath,
   transcriptsDir,
-  type BackgroundSession,
-  type SessionOptions,
-} from "./sessions.js";
+} from "./session-record.js";
 import {
   roleTimeline,
   sessionTimeline,
@@ -57,7 +47,8 @@ export interface Conversation {
   purpose?: Purpose;
   loop: string;
   base: { name: string; source: string } | null;
-  session: BackgroundSession;
+  /** Claude Code's id of its session, which names its transcript and continues it. */
+  session: { session_id: string };
   started_at: string;
   /** What the Studio sent the session for the owner, verbatim. */
   sent: { text: string; at: string }[];
@@ -78,7 +69,7 @@ function readStore(root: string): Conversation[] {
 }
 function writeStore(root: string, conversations: Conversation[]): void {
   fs.mkdirSync(path.dirname(storeFile(root)), { recursive: true });
-  // Only the last few are kept: older ones are in Claude Code's own session list.
+  // Only the last few are kept: older ones are in Claude Code's own list of sessions.
   writeStateJsonAtomic(storeFile(root), {
     schema_version: 1,
     conversations: conversations.slice(-20),
@@ -117,11 +108,11 @@ export const ownerMessage = (text: string, pointers: Pointer[]): string =>
 
 export async function startConversation(
   projectRoot: string,
-  options: SessionOptions,
+  host: SessionHost,
   request: { loop: AuthoringLoop; base: Conversation["base"]; text: string; pointers: Pointer[] },
 ): Promise<Conversation> {
   const description = describeRequest(request.loop, request.base, request.text, request.pointers);
-  return begin(projectRoot, options, {
+  return begin(projectRoot, host, {
     purpose: "authoring",
     loop: request.loop,
     base: request.base,
@@ -130,18 +121,18 @@ export async function startConversation(
 }
 
 /**
- * Run one of the project's loops in a background session, as the role that runs
- * loops: it passes the arguments the loop's definition names, and relays the
+ * Run one of the project's loops in a session, as the role that runs loops: it
+ * passes the arguments the loop's definition names, and relays the
  * owner's answers when the loop stops for them.
  */
 export function runLoop(
   projectRoot: string,
-  options: SessionOptions,
+  host: SessionHost,
   loop: string,
 ): Promise<Conversation> {
   if (!/^[a-z0-9][a-z0-9-]*$/.test(loop))
     throw new Error("a loop name is lowercase words joined by hyphens");
-  return begin(projectRoot, options, {
+  return begin(projectRoot, host, {
     purpose: "run",
     loop,
     base: { name: loop, source: "project" },
@@ -157,13 +148,13 @@ export function runLoop(
  */
 export function trialLoop(
   projectRoot: string,
-  options: SessionOptions,
+  host: SessionHost,
   loop: string,
   goal: string,
 ): Promise<Conversation> {
   if (!/^[a-z0-9][a-z0-9-]*$/.test(loop))
     throw new Error("a loop name is lowercase words joined by hyphens");
-  return begin(projectRoot, options, {
+  return begin(projectRoot, host, {
     purpose: "run",
     loop: "loop-trial",
     base: { name: loop, source: "project" },
@@ -173,24 +164,27 @@ export function trialLoop(
 
 async function begin(
   projectRoot: string,
-  options: SessionOptions,
+  host: SessionHost,
   request: { purpose: Purpose; loop: string; base: Conversation["base"]; prompt: string },
 ): Promise<Conversation> {
   const root = path.resolve(projectRoot);
   const id = crypto.randomBytes(4).toString("hex");
   const prompt = request.prompt;
-  const session = await startSession(options, root, {
-    name: `contrejour-studio-${id}`,
+  const live = await host.start({
+    key: id,
+    root,
     // The role that runs loops and relays the owner's answers.
     agent: entryRoleOf(root),
-    prompt,
+    message: prompt,
+    // The Studio's own words, carrying the owner's: never an answer to a review.
+    human: false,
   });
   const conversation: Conversation = {
     id,
     purpose: request.purpose,
     loop: request.loop,
     base: request.base,
-    session,
+    session: { session_id: live.sessionId! },
     started_at: new Date().toISOString(),
     sent: [{ text: prompt, at: new Date().toISOString() }],
   };
@@ -198,9 +192,19 @@ async function begin(
   return conversation;
 }
 
+/** Whether this project has that conversation. */
+export function hasConversation(projectRoot: string, id: string): boolean {
+  return readStore(path.resolve(projectRoot)).some((entry) => entry.id === id);
+}
+
+/**
+ * The owner's message for a conversation: its session takes it as it is, or, once
+ * that session is over (the Studio restarted, its process ended), the message
+ * continues it from its transcript.
+ */
 export async function answerConversation(
   projectRoot: string,
-  options: SessionOptions,
+  host: SessionHost,
   request: { id: string; text: string; pointers: Pointer[] },
 ): Promise<Conversation> {
   const root = path.resolve(projectRoot);
@@ -209,7 +213,15 @@ export async function answerConversation(
   if (!conversation) throw new Error(`no conversation ${request.id}`);
   const message = ownerMessage(request.text, request.pointers);
   if (!message) throw new Error("the reply is empty");
-  conversation.session = await sessionControl(options, root).resume(conversation.session, message);
+  if (!host.send(conversation.id, message, true))
+    await host.start({
+      key: conversation.id,
+      root,
+      agent: entryRoleOf(root),
+      message,
+      human: true,
+      resume: conversation.session.session_id,
+    });
   conversation.sent.push({ text: message, at: new Date().toISOString() });
   writeStore(root, conversations);
   return conversation;
@@ -257,29 +269,16 @@ async function draftOf(
 }
 
 /**
- * Before a project's folder is deleted: the sessions the Studio started in it
- * that are still working, which keep the folder. When none is, the ones whose
- * process only waits (for the owner, say) are stopped, since their folder goes.
+ * Before a project's folder is deleted: the conversations whose sessions still
+ * work in it, which keep the folder. When none does, the sessions that only wait
+ * for a message end, since their folder goes.
  */
-export async function releaseSessions(
-  projectRoot: string,
-  options: SessionOptions,
-): Promise<string[]> {
+export async function releaseSessions(projectRoot: string, host: SessionHost): Promise<string[]> {
   const root = path.resolve(projectRoot);
-  const sessions = new Map(readStore(root).map((entry) => [entry.session.id, entry.session]));
-  if (!sessions.size) return [];
-  const listed = await listSessions(options, root);
-  const states = [...sessions.values()].map((session) => ({
-    session,
-    state: sessionState(listed.find((entry) => entry.id === session.id)),
-  }));
-  const working = states.filter((entry) => entry.state === "running");
-  if (working.length) return working.map((entry) => entry.session.id);
-  for (const { session, state } of states)
-    if (state === "idle") {
-      const stopped = await runClaude(stopArgv(options, session), root);
-      if (!stopped.ok) throw new Error(`claude stop failed: ${stopped.stderr}`);
-    }
+  const here = host.all().filter((live) => live.root === root);
+  const working = here.filter((live) => live.state === "running");
+  if (working.length) return working.map((live) => live.key);
+  await Promise.all(here.map((live) => host.close(live.key)));
   return [];
 }
 
@@ -291,15 +290,22 @@ function transcriptOf(root: string, id: string): string | null | undefined {
 /** A conversation as the chat shows it, or one role of a loop it ran; null for no such conversation. */
 export function conversationTimeline(
   projectRoot: string,
+  host: SessionHost,
   id: string,
   role: { run: string; agent: string } | null = null,
 ): SessionTimeline | null {
   const root = path.resolve(projectRoot);
   const transcript = transcriptOf(root, id);
   if (transcript === undefined) return null;
-  return role
-    ? roleTimeline(transcript, role.run, role.agent, root)
-    : sessionTimeline(transcript, root, transcriptsDir());
+  if (role) return roleTimeline(transcript, role.run, role.agent, root);
+  const live = host.get(id);
+  // A session just started may not have written its record yet: that is no missing record.
+  const starting = live?.state === "running" && Date.now() - live.startedAt < 20_000;
+  return {
+    ...sessionTimeline(transcript, root, transcriptsDir()),
+    ...(starting ? { record_missing: null } : {}),
+    streaming: live?.streaming ?? "",
+  };
 }
 /** One tool call of a conversation, or of one role of a loop it ran, in full. */
 export function conversationTool(
@@ -323,92 +329,61 @@ export function conversationTool(
       : transcript;
   return toolDetail(transcriptEntries(file), tool, root);
 }
-/** Stop a conversation's session where it is, a loop it runs with it; a message continues it later. */
+/** Stop what a conversation's session is doing, a loop it runs with it; a message continues it later. */
 export async function stopConversation(
   projectRoot: string,
-  options: SessionOptions,
+  host: SessionHost,
   id: string,
 ): Promise<void> {
-  const root = path.resolve(projectRoot);
-  const conversation = readStore(root).find((entry) => entry.id === id);
-  if (!conversation) throw new Error(`no conversation ${id}`);
-  const stopped = await runClaude(stopArgv(options, conversation.session), root);
-  if (!stopped.ok) throw new Error(`claude stop failed: ${stopped.stderr}`);
-}
-
-/** A silent session's terminal output, read at most once a minute while the page keeps asking. */
-const logsRead = new Map<string, { at: number; text: string }>();
-async function recentLogs(
-  options: SessionOptions,
-  root: string,
-  session: BackgroundSession,
-): Promise<string> {
-  const known = logsRead.get(session.id);
-  if (known && Date.now() - known.at < 60_000) return known.text;
-  const text = await sessionLogs(options, root, session).catch(() => "");
-  logsRead.set(session.id, { at: Date.now(), text });
-  return text;
+  if (!hasConversation(projectRoot, id)) throw new Error(`no conversation ${id}`);
+  await host.interrupt(id);
 }
 
 /** How each recent conversation stands: working, waiting for the owner (with the note and the draft), or ended. */
 export async function conversationStatuses(
   projectRoot: string,
-  options: SessionOptions,
+  host: SessionHost,
 ): Promise<ConversationStatus[]> {
   const root = path.resolve(projectRoot);
   const conversations = readStore(root).slice(-5);
-  if (!conversations.length) return [];
-  const listed = await listSessions(options, root);
   const statuses: ConversationStatus[] = [];
   for (const conversation of conversations) {
-    const live = sessionState(listed.find((entry) => entry.id === conversation.session.id));
+    const live = host.get(conversation.id);
     const transcript = transcriptPath(root, conversation.session.session_id);
-    const entries = readTranscript(transcript);
+    const entries = transcriptEntries(transcript);
     const results = loopResults(entries);
     const latest = results.at(-1) ?? null;
     const last = latest?.value ?? null;
     // A message the loop has not answered yet: sent after its latest result, or before it gave any.
     const sentAt = Date.parse(conversation.sent.at(-1)?.at ?? "") || 0;
     const pending = !latest || (Date.parse(latest.at) || 0) < sentAt;
-    // Right after a reply Claude Code may still list the session as idle for a moment.
-    const starting = pending && live === "idle" && Date.now() - sentAt < 20_000;
     let state: ConversationStatus["state"];
-    if (live === "gone") state = "gone";
-    else if (live === "running" || starting) state = "running";
+    if (live?.state === "running") state = "running";
     // The loop still waits at its review until a new result comes, even when a reply did not reach it.
     else if (ownerWait(last)) state = "waiting";
     else if (!pending && last !== null) state = "done";
-    else state = live === "stopped" ? "stopped" : "idle";
+    // Its turn is over and its session waits for a message.
+    else if (live?.state === "idle") state = "idle";
+    // No session runs it any more: a message continues it from its transcript, if there is one.
+    else state = transcript ? "stopped" : "gone";
     const review = state === "waiting" ? ownerWait(last) : null;
     // A reply that did not reach the loop: what the session said about it.
     const replyFailed = state === "waiting" && pending;
-    // A session that stopped with no result: its last words, from its transcript or else its terminal.
-    let silent = "";
-    if (state === "idle" || state === "stopped") {
-      silent = lastWords(entries);
-      if (!silent) {
-        const logs = await recentLogs(options, root, conversation.session);
-        if (logs) silent = `\`\`\`text\n${logs}\n\`\`\``;
-      }
-    }
     statuses.push({
       id: conversation.id,
       purpose: conversation.purpose ?? "authoring",
       loop: conversation.loop,
       base: conversation.base,
-      session: conversation.session.id,
       started_at: conversation.started_at,
       state,
       review,
-      note: review
-        ? readNote(root, review.document) || lastAssistantText(entries)
-        : silent || lastAssistantText(entries),
+      note: review ? readNote(root, review.document) || lastAssistantText(entries) : "",
       result: state === "done" ? last : null,
       draft: review ? await draftOf(root, review) : null,
       progress: state === "running" ? runProgress(transcript) : [],
       reply_failed: replyFailed,
       last_words: replyFailed ? lastAssistantText(entries) : "",
-      record_missing: transcript === null ? transcriptsDir() : null,
+      failure: live?.failure ?? null,
     });
   }
   return statuses.reverse();

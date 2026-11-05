@@ -157,12 +157,10 @@ export interface AuthoringStatus {
   purpose: "authoring" | "run";
   loop: string;
   base: { name: string; source: string } | null;
-  /** The background session's short id, for `claude attach`. */
-  session: string;
   started_at: string;
   state: "running" | "waiting" | "idle" | "done" | "stopped" | "gone";
   review: ReviewWait | null;
-  /** The review note, or the session's last words when it did not stop at a review. */
+  /** The review note, when it stopped at one. */
   note: string;
   /** What the loop returned when it ended. */
   result: unknown;
@@ -179,8 +177,18 @@ export interface AuthoringStatus {
   reply_failed: boolean;
   /** What the session said about it. */
   last_words: string;
-  /** Claude Code's folder of transcripts, when this session's transcript is not in it: its progress cannot be followed. */
-  record_missing: string | null;
+  /** Why its last turn failed, or its session ended, in Claude Code's words. */
+  failure: string | null;
+}
+/** A session the Studio runs, as it changes: sent to the page as it goes. */
+export interface LiveEvent {
+  /** The conversation it belongs to. */
+  id: string;
+  state: "running" | "idle" | "closed";
+  /** Moves when the session records something new, so its timeline has more to show. */
+  steps: number;
+  /** What it is writing, or wrote last. */
+  streaming: string;
 }
 
 /** The workspace's projects and the reference projects a new one can start from. */
@@ -299,6 +307,8 @@ export interface SessionTimeline {
   items: TimelineItem[];
   /** Claude Code's folder of transcripts, when this session's transcript is not in it. */
   record_missing: string | null;
+  /** What the session is writing, or wrote last: whole in the rows a moment after it ends. */
+  streaming: string;
 }
 /** What one tool call did, in full, read when the owner opens it. */
 export type ToolDetail =

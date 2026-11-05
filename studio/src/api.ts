@@ -51,21 +51,11 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     window.location.reload();
     throw new Error("signed out");
   }
-  const reply = (await response.json().catch(() => ({}))) as T & {
-    error?: string;
-    code?: string;
-    location?: string | null;
-    detail?: string | null;
-  };
-  if (!response.ok) {
-    // The helper's code says what stood in the way (a folder Claude Code does not trust yet, say), and where.
+  const reply = (await response.json().catch(() => ({}))) as T & { error?: string };
+  if (!response.ok)
     throw Object.assign(new Error(readable(reply.error ?? `HTTP ${response.status}`)), {
       status: response.status,
-      code: reply.code,
-      location: reply.location ?? undefined,
-      detail: reply.detail ?? undefined,
     });
-  }
   return reply;
 }
 
@@ -84,8 +74,7 @@ export const api = {
   role: (name: string) => get<RoleDetail>(`/api/role?${query({ name })}`),
   search: (q: string) => get<SearchResult>(`/api/search?${query({ q })}`),
   conversations: () => get<{ conversations: AuthoringStatus[] }>("/api/authoring"),
-  startAuthoring: (request: AuthoringRequest) =>
-    post<{ id: string; session: string }>("/api/authoring", request),
+  startAuthoring: (request: AuthoringRequest) => post<{ id: string }>("/api/authoring", request),
   projects: () => get<ProjectsInfo>("/api/projects"),
   openProject: (name: string) =>
     post<{ current: string; update?: import("./types.js").ProjectUpdate }>("/api/projects/open", {
@@ -109,9 +98,8 @@ export const api = {
       name,
       params,
     }),
-  run: (name: string) => post<{ id: string; session: string }>("/api/run", { name }),
-  trial: (name: string, goal: string) =>
-    post<{ id: string; session: string }>("/api/trial", { name, goal }),
+  run: (name: string) => post<{ id: string }>("/api/run", { name }),
+  trial: (name: string, goal: string) => post<{ id: string }>("/api/trial", { name, goal }),
   /** A conversation as the chat shows it, row by row; or one role of a loop it ran. */
   timeline: (id: string, role?: { run: string; agent: string }) =>
     get<SessionTimeline>(
@@ -124,5 +112,5 @@ export const api = {
     ),
   stop: (id: string) => post<{ stopped: string }>("/api/authoring/stop", { id }),
   answer: (id: string, text: string, references: CanvasPointer[]) =>
-    post<{ id: string; session: string }>("/api/authoring/answer", { id, text, references }),
+    post<{ id: string }>("/api/authoring/answer", { id, text, references }),
 };

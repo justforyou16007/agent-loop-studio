@@ -7,8 +7,6 @@ import {
   ChevronDown,
   Clock,
   Square,
-  Copy,
-  RotateCcw,
   Eye,
   LayoutPanelLeft,
   Loader2,
@@ -53,6 +51,7 @@ export function ChatPanel({
   current,
   editing,
   waiting,
+  continuing,
   target,
   onClearTarget,
   onViewFiles,
@@ -62,6 +61,7 @@ export function ChatPanel({
   conversation,
   running,
   onStop,
+  onNewConversation,
   queued,
   onUnqueue,
 }: {
@@ -80,6 +80,8 @@ export function ChatPanel({
   editing: boolean;
   /** A loop waits for the owner's reply. */
   waiting: boolean;
+  /** The next message goes to the session shown, rather than starting a conversation. */
+  continuing: boolean;
   /** What the chat changes instead of the loop on the canvas, such as a role. */
   target: string | null;
   onClearTarget: () => void;
@@ -93,6 +95,8 @@ export function ChatPanel({
   /** Its session is working: a message waits for its turn to end, and it can be stopped. */
   running: boolean;
   onStop: () => Promise<void>;
+  /** The next message starts a conversation of its own, rather than continuing this one. */
+  onNewConversation: () => void;
   /** A message waiting for the session's turn to end. */
   queued: string | null;
   onUnqueue: () => void;
@@ -104,6 +108,8 @@ export function ChatPanel({
   const recalled = useRef<number | null>(null);
   /** The list follows its end while the owner has not scrolled away from it. */
   const pinned = useRef(true);
+  /** When the owner last moved the list themselves: rows changing height move it too, and that is no leaving. */
+  const moved = useRef(0);
   const [away, setAway] = useState(false);
   const content = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
@@ -212,11 +218,23 @@ export function ChatPanel({
       <div className="relative min-h-0 flex-1">
         <div
           ref={list}
+          onWheel={() => (moved.current = Date.now())}
+          onTouchMove={() => (moved.current = Date.now())}
+          onKeyDown={() => (moved.current = Date.now())}
+          onPointerDown={(event) => {
+            // On the list itself is its scrollbar; a press on what is in it scrolls nothing.
+            if (event.target === event.currentTarget) moved.current = Date.now();
+          }}
           onScroll={(event) => {
             const box = event.currentTarget;
             const near = box.scrollHeight - box.scrollTop - box.clientHeight < 64;
-            pinned.current = near;
-            setAway(!near);
+            if (near) {
+              pinned.current = true;
+              setAway(false);
+            } else if (!pinned.current || Date.now() - moved.current < 1000) {
+              pinned.current = false;
+              setAway(true);
+            } else box.scrollTo({ top: box.scrollHeight });
           }}
           className="scroll-thin h-full overflow-y-auto px-4 py-4"
         >
@@ -235,6 +253,7 @@ export function ChatPanel({
                 onFocus={onFocus}
                 conversation={conversation}
                 onStop={onStop}
+                onNewConversation={onNewConversation}
               />
             ))}
             {onlyWelcome && (
@@ -445,7 +464,15 @@ export function ChatPanel({
                 send();
               }
             }}
-            placeholder={t(waiting ? "composer_reply" : editing ? "composer_change" : "composer")}
+            placeholder={t(
+              waiting
+                ? "composer_reply"
+                : continuing
+                  ? "composer_continue"
+                  : editing
+                    ? "composer_change"
+                    : "composer",
+            )}
             className="block w-full resize-none bg-transparent px-3 py-2.5 text-[13px] leading-5 outline-none placeholder:text-ink-4"
           />
           <div className="flex items-center justify-between px-2 pb-2">
@@ -506,6 +533,7 @@ function Message({
   onFocus,
   conversation,
   onStop,
+  onNewConversation,
 }: {
   message: ChatMessage;
   onPreview: (target: LoopRef) => void;
@@ -519,6 +547,7 @@ function Message({
   onFocus: (focus: Focus) => void;
   conversation: string | null;
   onStop: () => Promise<void>;
+  onNewConversation: () => void;
 }) {
   const { t } = useLang();
   if (message.from === "owner")
@@ -571,6 +600,7 @@ function Message({
             pending={message.replies ?? []}
             onReply={message.session === conversation ? onReply : undefined}
             onStop={message.session === conversation ? onStop : undefined}
+            onNewConversation={message.session === conversation ? onNewConversation : undefined}
             onViewFiles={onViewFiles}
             names={names}
             onFocus={onFocus}
@@ -603,13 +633,6 @@ function Message({
               onLoop={(name) => onFocus({ kind: "loop", name })}
             />
           </div>
-        )}
-        {message.trust && (
-          <TrustCard
-            folder={message.trust.folder}
-            detail={message.trust.detail}
-            onRetry={message.retry}
-          />
         )}
         {message.files && message.files.length > 0 && (
           <Button size="sm" onClick={() => onViewFiles(message.files!)}>
@@ -762,79 +785,5 @@ function Sentence({
         ),
       )}
     </>
-  );
-}
-
-/** A shell's own words for a folder: in single quotes, a quote inside written as '\''. */
-const quoted = (folder: string): string => `'${folder.replace(/'/g, "'\\''")}'`;
-
-/**
- * What to do for a project whose folder Claude Code does not trust, when the
- * Studio could not record that trust itself (it does for its workspace and every
- * project in it): trust it at Claude Code's own prompt, in a terminal there.
- */
-function TrustCard({
-  folder,
-  detail,
-  onRetry,
-}: {
-  folder: string;
-  detail?: string;
-  onRetry?: () => void;
-}) {
-  const { t } = useLang();
-  const [copied, setCopied] = useState<"folder" | "command" | null>(null);
-  const command = `cd ${quoted(folder)} && claude`;
-  const copy = async (what: "folder" | "command", text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(what);
-      setTimeout(() => setCopied((now) => (now === what ? null : now)), 1600);
-    } catch {
-      // The page may not reach the clipboard: the path and command stay selectable.
-    }
-  };
-  return (
-    <div className="rounded-xl border border-wait-500/40 bg-wait-50/60 px-3 py-2.5 text-[12.5px] leading-5 text-ink-2">
-      <ol className="list-decimal space-y-1.5 pl-4">
-        <li>
-          {t("trust_step_open")}
-          <div className="mt-1 flex items-start gap-1.5">
-            <code
-              title={folder}
-              className="min-w-0 flex-1 select-all break-all rounded-md bg-white px-1.5 py-0.5 font-mono text-[11.5px] text-ink"
-            >
-              {command}
-            </code>
-            <Button size="sm" onClick={() => void copy("command", command)}>
-              <Copy size={12} />{" "}
-              {copied === "command" ? t("trust_copied") : t("trust_copy_command")}
-            </Button>
-          </div>
-          <button
-            type="button"
-            onClick={() => void copy("folder", folder)}
-            className="mt-0.5 text-[11px] text-ink-4 underline-offset-2 hover:text-ink-2 hover:underline"
-          >
-            {copied === "folder" ? t("trust_copied") : t("trust_copy_folder")}
-          </button>
-        </li>
-        <li>{t("trust_step_run")}</li>
-        <li>{t(onRetry ? "trust_step_retry" : "trust_step_done")}</li>
-      </ol>
-      {onRetry && (
-        <div className="mt-2">
-          <Button size="sm" variant="primary" onClick={onRetry}>
-            <RotateCcw size={12} /> {t("retry")}
-          </Button>
-        </div>
-      )}
-      <p className="mt-2 text-[11px] leading-4 text-ink-4">{t("trust_why")}</p>
-      {detail && (
-        <p className="mt-1 break-all text-[11px] leading-4 text-ink-4">
-          {t("trust_detail", { detail })}
-        </p>
-      )}
-    </div>
   );
 }

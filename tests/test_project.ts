@@ -20,14 +20,18 @@ const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agent-loo
 const workspace = path.join(sandbox, "workspace");
 fs.mkdirSync(workspace);
 const read = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
-// Claude Code's config, stood in for: the Studio records its trust there, never in this machine's own.
+// Claude Code's own folder, stood in for: the Studio looks for transcripts there, and this machine's is never touched.
 const claudeConfig = path.join(sandbox, "claude-config");
 fs.mkdirSync(claudeConfig);
-const claudeJson = path.join(claudeConfig, ".claude.json");
-const claudeBefore = { numStartups: 7, oauthAccount: { accountUuid: "someone" }, projects: { "/elsewhere": { allowedTools: ["Bash"], hasTrustDialogAccepted: false } } };
-fs.writeFileSync(claudeJson, JSON.stringify(claudeBefore, null, 2));
 process.env.CLAUDE_CONFIG_DIR = claudeConfig;
-const trustedIn = (folder: string) => read(claudeJson).projects?.[folder]?.hasTrustDialogAccepted === true;
+// Something a test waits for: what the Studio does with a session's messages, it does a moment after they come.
+async function until(what: string, happened: () => boolean | Promise<boolean>): Promise<void> {
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    if (await happened()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(`never happened: ${what}`);
+}
 
 function request(url: string, options: { method?: string; cookie?: string; body?: unknown } = {}) {
   const target = new URL(url);
@@ -63,7 +67,7 @@ try {
   const installer = path.join(sandbox, "package/contrejour/install.mjs");
   const plain = path.join(workspace, "plain");
   const printed = execFileSync(process.execPath, [installer, "--role", "default", "--project", plain, "--library", source], { encoding: "utf8" });
-  assert.match(printed, /studio\.js --project/);
+  assert.match(printed, /npm start -- --project/);
   assert.equal(read(path.join(plain, ".contrejour/project.json")).name, "agent-loop-studio");
   for (const role of ["task-manager", "project-memory", "owner-review", "loop-editor", "trajectory-optimizer"])
     assert.ok(fs.existsSync(path.join(plain, ".claude/agents", `${role}.md`)), role);
@@ -113,40 +117,78 @@ try {
   const { serveStudio } = (await import(pathToFileURL(path.join(source, "dist/tools/studio.js")).href)) as {
     serveStudio(
       root: string,
-      options?: { port?: number; workspace?: string; library?: string; settings?: string; session?: { claude_command?: string[] } },
+      options?: { port?: number; workspace?: string; library?: string; settings?: string; session?: { query?: unknown } },
     ): Promise<{ url: string; loginUrl: string; close(): Promise<void> }>;
   };
-  // Claude Code's command, stood in for: it lists the background sessions a file says, and records each it is told to stop.
-  const agentsFile = path.join(sandbox, "fake-agents.json");
-  const stoppedFile = path.join(sandbox, "fake-stopped.log");
-  const fakeClaude = path.join(sandbox, "fake-claude.mjs");
-  fs.writeFileSync(agentsFile, "[]");
-  fs.writeFileSync(
-    fakeClaude,
-    `import fs from "node:fs";
-const [command, ...rest] = process.argv.slice(2);
-if (command === "agents") process.stdout.write(fs.readFileSync(${JSON.stringify(agentsFile)}, "utf8"));
-else if (command === "stop") fs.appendFileSync(${JSON.stringify(stoppedFile)}, rest[0] + "\\n");
-// What Claude Code says when it is asked for a background session in a folder nobody told it to trust.
-else if (command === "logs") process.stdout.write("\\u001b[31mthe session's last terminal line\\u001b[0m\\n");
-else if (command === "--bg") { process.stderr.write("Workspace not trusted. Run \`claude\` in " + process.cwd() + " once and accept the trust prompt, then retry.\\n"); process.exit(1); }
-else { process.stderr.write("not stood in for: " + command); process.exit(1); }
-`,
-  );
+  // Claude Code, stood in for through the SDK's query: each session it starts is kept here, says what the test makes
+  // it say, and records what the Studio sends it. It starts as Claude Code does, naming itself once it has a message.
+  interface FakeSession {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    options: Record<string, any>;
+    sent: { message: { content: string }; origin?: { kind: string } }[];
+    interrupted: number;
+    closed: boolean;
+    say(...messages: Record<string, unknown>[]): void;
+    die(error: Error): void;
+  }
+  const fakeSessions: FakeSession[] = [];
+  let startFailure: Error | null = null;
+  const fakeQuery = ({ prompt, options }: { prompt: AsyncIterable<FakeSession["sent"][number]>; options: FakeSession["options"] }) => {
+    const said: Record<string, unknown>[] = [];
+    let death: Error | null = null;
+    let ended = false;
+    let wake = () => {};
+    const session: FakeSession = {
+      options,
+      sent: [],
+      interrupted: 0,
+      closed: false,
+      say(...messages) {
+        said.push(...messages);
+        wake();
+      },
+      die(error) {
+        death = error;
+        wake();
+      },
+    };
+    fakeSessions.push(session);
+    const failure = startFailure;
+    const name = options.resume ?? `fake-session-${fakeSessions.length}`;
+    void (async () => {
+      for await (const message of prompt) {
+        if (failure) session.die(failure);
+        else if (!session.sent.length)
+          session.say({ type: "system", subtype: "session_state_changed", state: "running" }, { type: "system", subtype: "init", session_id: name });
+        session.sent.push(message);
+      }
+    })();
+    const messages = (async function* () {
+      for (;;) {
+        while (said.length) yield said.shift();
+        if (death) throw death;
+        if (ended) return;
+        await new Promise<void>((resolve) => (wake = resolve));
+      }
+    })();
+    return Object.assign(messages, {
+      interrupt: async () => {
+        session.interrupted += 1;
+        session.say({ type: "system", subtype: "session_state_changed", state: "idle" });
+      },
+      close: () => {
+        session.closed = true;
+        ended = true;
+        wake();
+      },
+    });
+  };
   const settingsFile = path.join(sandbox, "studio-settings.json");
-  const studio = await serveStudio("", { port: 0, workspace, library: source, settings: settingsFile, session: { claude_command: [process.execPath, fakeClaude] } });
+  const studio = await serveStudio("", { port: 0, workspace, library: source, settings: settingsFile, session: { query: fakeQuery } });
   try {
     const at = (relative: string) => new URL(relative, studio.url).href;
     const cookie = String((await request(studio.loginUrl)).headers["set-cookie"]).split(";")[0]!;
     assert.equal((await request(at("api/overview"), { cookie })).status, 409, "no project is open yet");
-    // The workspace the Studio starts with is trusted in Claude Code, and so is each project in it, a repository of its own.
-    assert.ok(trustedIn(workspace) && trustedIn(plain));
-    assert.deepEqual(read(claudeJson).projects[workspace], {
-      allowedTools: [], mcpContextUris: [], mcpServers: {}, enabledMcpjsonServers: [], disabledMcpjsonServers: [],
-      hasTrustDialogAccepted: true, hasClaudeMdExternalIncludesApproved: false, hasClaudeMdExternalIncludesWarningShown: false,
-    }, "a new entry in Claude Code's own shape");
-    assert.deepEqual([read(claudeJson).numStartups, read(claudeJson).oauthAccount, read(claudeJson).projects["/elsewhere"]], [7, claudeBefore.oauthAccount, claudeBefore.projects["/elsewhere"]], "the rest is as it was");
-    assert.equal(fs.existsSync(`${claudeJson}.lock`), false);
     let projects = JSON.parse((await request(at("api/projects"), { cookie })).body);
     assert.equal(projects.current, null);
     assert.deepEqual(projects.projects.map((entry: { name: string }) => entry.name), ["plain"]);
@@ -160,7 +202,6 @@ else { process.stderr.write("not stood in for: " + command); process.exit(1); }
     const created = await request(at("api/projects/new"), { cookie, method: "POST", body: { name: "first", reference: "iterate-and-check" } });
     assert.equal(created.status, 200, created.body);
     const first = path.join(workspace, "first");
-    assert.ok(trustedIn(first), "a project made in the workspace is trusted as it is made");
     for (const role of ["planner", "builder", "checker"]) {
       assert.ok(fs.existsSync(path.join(first, ".claude/agents", `${role}.md`)));
       assert.ok(fs.existsSync(path.join(first, ".contrejour/seeded/agents", `${role}.md`)), "kept as the baseline for contributions");
@@ -245,24 +286,27 @@ else { process.stderr.write("not stood in for: " + command); process.exit(1); }
     const nowhere = JSON.parse((await request(at(`api/projects/folders?path=${encodeURIComponent(path.join(sandbox, "nowhere"))}`), { cookie })).body);
     assert.deepEqual([nowhere.exists, nowhere.folders], [false, []]);
 
-    // A project deleted: never while a loop the Studio started works in it; then the sessions only waiting in it are stopped and its folder goes.
+    // A project deleted: never while a loop the Studio started works in it; then the sessions only waiting in it end and its folder goes.
     assert.equal((await request(at("api/projects/delete"), { cookie, method: "POST", body: { name: "nope" } })).status, 404);
-    const session = { id: "abc123", session_id: "session-1", name: "run" };
-    fs.mkdirSync(path.join(second, ".contrejour/studio"), { recursive: true });
-    fs.writeFileSync(
-      path.join(second, ".contrejour/studio/conversations.json"),
-      JSON.stringify({ schema_version: 1, conversations: [{ id: "c1", loop: "iterate-and-check", base: null, session, started_at: "2026-11-04T00:00:00.000Z", sent: [] }] }),
-    );
-    fs.writeFileSync(agentsFile, JSON.stringify([{ id: "abc123", sessionId: "session-1", status: "busy" }]));
+    assert.equal((await request(at("api/projects/open"), { cookie, method: "POST", body: { name: "second" } })).status, 200);
+    const inSecond = await request(at("api/run"), { cookie, method: "POST", body: { name: "setup" } });
+    assert.equal(inSecond.status, 200, inSecond.body);
+    const secondSession = fakeSessions.at(-1)!;
+    assert.equal((await request(at("api/projects/open"), { cookie, method: "POST", body: { name: "first" } })).status, 200);
     const working = await request(at("api/projects/delete"), { cookie, method: "POST", body: { name: "second" } });
     assert.equal(working.status, 409, working.body);
-    assert.match(JSON.parse(working.body).error, /abc123/);
+    assert.ok(JSON.parse(working.body).error.includes(JSON.parse(inSecond.body).id));
     assert.ok(fs.existsSync(second));
-    fs.writeFileSync(agentsFile, JSON.stringify([{ id: "abc123", sessionId: "session-1", status: "done" }]));
-    const deleted = await request(at("api/projects/delete"), { cookie, method: "POST", body: { name: "second" } });
+    secondSession.say({ type: "system", subtype: "session_state_changed", state: "idle" });
+    const deleted = await (async () => {
+      for (;;) {
+        const reply = await request(at("api/projects/delete"), { cookie, method: "POST", body: { name: "second" } });
+        if (reply.status !== 409) return reply;
+      }
+    })();
     assert.equal(deleted.status, 200, deleted.body);
     assert.equal(fs.existsSync(second), false);
-    assert.equal(fs.readFileSync(stoppedFile, "utf8"), "abc123\n", "the session waiting in it was stopped");
+    assert.equal(secondSession.closed, true, "the session waiting in it ended first");
     assert.equal(JSON.parse(deleted.body).current, "first", "the project open stays open");
     // The project open now, deleted: none is open after it.
     assert.equal((await request(at("api/projects/new"), { cookie, method: "POST", body: { name: "doomed", reference: null } })).status, 200);
@@ -282,7 +326,6 @@ else { process.stderr.write("not stood in for: " + command); process.exit(1); }
     projects = JSON.parse((await request(at("api/projects"), { cookie })).body);
     assert.deepEqual([projects.workspace, projects.projects, projects.recent_workspaces], [other, [], [workspace]]);
     assert.deepEqual(read(settingsFile), { workspace: other, recent: [workspace] });
-    assert.ok(trustedIn(other), "a workspace switched to is trusted");
     assert.equal(JSON.parse((await request(at("api/projects/workspace"), { cookie, method: "POST", body: { path: workspace } })).body).workspace, workspace);
     assert.deepEqual(JSON.parse((await request(at("api/projects"), { cookie })).body).recent_workspaces, [other]);
 
@@ -294,53 +337,133 @@ else { process.stderr.write("not stood in for: " + command); process.exit(1); }
     assert.equal(JSON.parse((await request(at("api/projects"), { cookie })).body).current, null);
     fs.renameSync(`${record}.away`, record);
 
-    // A folder Claude Code does not trust yet: the run does not start, and the page is told which folder to trust.
+    // --- a session, started through the SDK and followed as it goes ---
     assert.equal((await request(at("api/projects/open"), { cookie, method: "POST", body: { name: "first" } })).status, 200);
-    const untrusted = await request(at("api/run"), { cookie, method: "POST", body: { name: "setup" } });
-    assert.equal(untrusted.status, 409, untrusted.body);
-    const refusal = JSON.parse(untrusted.body);
-    assert.deepEqual([refusal.code, refusal.location], ["WORKSPACE_NOT_TRUSTED", first]);
-    assert.match(refusal.error, /Yes, I trust this folder/);
-    assert.equal(refusal.detail, null, "the Studio had recorded the trust; Claude Code refused anyway");
-    // Without Claude Code's config the Studio cannot record it, and says why.
-    fs.renameSync(claudeJson, `${claudeJson}.away`);
-    const unrecorded = JSON.parse((await request(at("api/run"), { cookie, method: "POST", body: { name: "setup" } })).body);
-    assert.match(unrecorded.detail, /does not exist yet: run claude once/);
-    assert.equal(fs.existsSync(claudeJson), false, "the Studio never creates Claude Code's config");
-    fs.renameSync(`${claudeJson}.away`, claudeJson);
-    // A workspace that could not be trusted before is, once a loop starts in one of its projects.
-    const config = read(claudeJson);
-    delete config.projects[workspace];
-    fs.writeFileSync(claudeJson, JSON.stringify(config, null, 2));
-    await request(at("api/run"), { cookie, method: "POST", body: { name: "setup" } });
-    assert.ok(trustedIn(workspace));
-
-    // A session that stopped with no result: the chat gets its last words, from its terminal while the Studio has
-    // no transcript of it (and is told where it looked), then from the transcript, an API error included.
-    const minuteAgo = new Date(Date.now() - 60_000).toISOString();
-    fs.mkdirSync(path.join(first, ".contrejour/studio"), { recursive: true });
-    fs.writeFileSync(
-      path.join(first, ".contrejour/studio/conversations.json"),
-      JSON.stringify({ schema_version: 1, conversations: [{ id: "c9", loop: "setup", base: null, session: { id: "idle01", session_id: "sess-idle", name: "run" }, started_at: minuteAgo, sent: [{ text: "Run the setup loop.", at: minuteAgo }] }] }),
-    );
-    fs.writeFileSync(agentsFile, JSON.stringify([{ id: "idle01", sessionId: "sess-idle", status: "done" }]));
-    const statusOf = async () => JSON.parse((await request(at("api/authoring"), { cookie })).body).conversations.find((entry: { id: string }) => entry.id === "c9");
-    let silent = await statusOf();
-    assert.equal(silent.state, "idle");
-    assert.equal(silent.note, "```text\nthe session's last terminal line\n```", "its terminal, without the colours");
-    assert.equal(silent.record_missing, path.join(claudeConfig, "projects"), "where Claude Code keeps transcripts: its own folder, CLAUDE_CONFIG_DIR");
+    const statusOf = async (id: string) => JSON.parse((await request(at("api/authoring"), { cookie })).body).conversations.find((entry: { id: string }) => entry.id === id);
+    const answer = (id: string, text: string, references: unknown[] = []) => request(at("api/authoring/answer"), { cookie, method: "POST", body: { id, text, references } });
     const transcriptFolder = path.join(claudeConfig, "projects", first.replace(/[^A-Za-z0-9]/g, "-"));
     fs.mkdirSync(transcriptFolder, { recursive: true });
-    fs.writeFileSync(
-      path.join(transcriptFolder, "sess-idle.jsonl"),
-      [
-        { type: "user", message: { role: "user", content: "Run the setup loop." } },
-        { type: "system", subtype: "api_error", error: { message: "Request timed out.", formatted: "Request timed out." }, retryAttempt: 1, maxRetries: 10 },
-        { type: "assistant", isApiErrorMessage: true, message: { role: "assistant", content: [{ type: "text", text: "API Error: 400 reasoning effort must be low, high, xhigh, max or an integer" }] } },
-      ].map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+    // Claude Code could not start: it says why, and no conversation is recorded.
+    startFailure = new Error("Claude Code is not logged in");
+    const refused = await request(at("api/run"), { cookie, method: "POST", body: { name: "setup" } });
+    assert.equal(refused.status, 500, refused.body);
+    assert.match(JSON.parse(refused.body).error, /not logged in/);
+    startFailure = null;
+    assert.deepEqual(JSON.parse((await request(at("api/authoring"), { cookie })).body).conversations, []);
+    // The session runs as the entry role, on the role's own instructions, with nobody to approve anything, standing alone.
+    process.env.CLAUDECODE = "1";
+    process.env.PASEO_AGENT_ID = "someone";
+    const ran = await request(at("api/run"), { cookie, method: "POST", body: { name: "setup" } });
+    assert.equal(ran.status, 200, ran.body);
+    delete process.env.CLAUDECODE;
+    delete process.env.PASEO_AGENT_ID;
+    const { id } = JSON.parse(ran.body);
+    const session = fakeSessions.at(-1)!;
+    const { options: started } = session;
+    assert.deepEqual(
+      [started.cwd, started.agent, started.permissionMode, started.allowDangerouslySkipPermissions, started.permissionPrompts, started.systemPrompt],
+      [first, "task-manager", "bypassPermissions", true, "none", { type: "preset", preset: "claude_code" }],
     );
-    silent = await statusOf();
-    assert.deepEqual([silent.note, silent.record_missing], ["API Error: 400 reasoning effort must be low, high, xhigh, max or an integer", null]);
+    assert.deepEqual([started.env.CLAUDECODE, started.env.PASEO_AGENT_ID, started.env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS], [undefined, undefined, "1"]);
+    await until("the Studio's message reaches the session", () => session.sent.length === 1);
+    assert.deepEqual([session.sent[0]!.message.content, session.sent[0]!.origin], ["Run the setup loop.", undefined], "the Studio's own words are never an answer to a review");
+    assert.equal(read(path.join(first, ".contrejour/studio/conversations.json")).conversations[0].session.session_id, "fake-session-" + fakeSessions.length);
+    assert.equal((await statusOf(id)).state, "running");
+    // The page follows it: the words as they are written, the session's own and not a role's, and each change of state.
+    const liveEvents: { id: string; state: string; steps: number; streaming: string }[] = [];
+    const eventStream = http.request({ hostname: "127.0.0.1", port: new URL(studio.url).port, path: "/api/events", headers: { host: new URL(studio.url).host, cookie } }, (response) => {
+      let buffered = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk: string) => {
+        buffered += chunk;
+        for (let end = buffered.indexOf("\n\n"); end >= 0; end = buffered.indexOf("\n\n")) {
+          const block = buffered.slice(0, end);
+          buffered = buffered.slice(end + 2);
+          if (block.startsWith("data: ")) liveEvents.push(JSON.parse(block.slice(6)));
+        }
+      });
+    });
+    eventStream.on("error", () => undefined);
+    eventStream.end();
+    await until("the page is told of the session as it connects", () => liveEvents.some((event) => event.id === id && event.state === "running"));
+    const words = (text: string, role: string | null = null) => ({ type: "stream_event", parent_tool_use_id: role, event: { type: "content_block_delta", delta: { type: "text_delta", text } } });
+    session.say({ type: "stream_event", parent_tool_use_id: null, event: { type: "message_start" } }, words("Hel"), words("a role's words", "a-role"), words("lo"));
+    await until("the words reach the page", () => liveEvents.at(-1)?.streaming === "Hello");
+    assert.equal(JSON.parse((await request(at(`api/authoring/timeline?id=${id}`), { cookie })).body).streaming, "Hello");
+    // A loop in the background keeps it working past its turn's result: it is idle only when Claude Code says nothing is left.
+    session.say({ type: "result", subtype: "success", is_error: false, result: "started" });
+    await until("the result is read", () => liveEvents.at(-1)?.steps !== liveEvents.at(-2)?.steps);
+    assert.equal((await statusOf(id)).state, "running");
+    session.say({ type: "system", subtype: "session_state_changed", state: "idle" });
+    await until("the page hears it is idle", () => liveEvents.at(-1)?.state === "idle");
+    assert.deepEqual([(await statusOf(id)).state, (await statusOf(id)).failure], ["idle", null]);
+    // Why a turn failed, in Claude Code's words: an API error, or what stopped it short.
+    session.say({ type: "result", subtype: "success", is_error: true, result: "API Error: 400 reasoning effort must be low, high, xhigh, max or an integer" });
+    await until("the failure is read", async () => (await statusOf(id)).failure !== null);
+    assert.match((await statusOf(id)).failure, /^API Error: 400 reasoning effort/);
+    session.say({ type: "result", subtype: "error_during_execution", is_error: true, errors: ["the tool broke", "and again"] });
+    await until("the failure is read", async () => (await statusOf(id)).failure === "the tool broke\nand again");
+    // The owner's message goes in marked as a person's, with what they pointed at; the session works again.
+    assert.equal((await answer("nope", "hello")).status, 404);
+    assert.equal((await answer(id, "  ")).status, 400);
+    const reply = await answer(id, "Make it shorter", [{ kind: "node", id: "n1", label: "Step 2" }]);
+    assert.equal(reply.status, 200, reply.body);
+    await until("the reply reaches the session", () => session.sent.length === 2);
+    assert.deepEqual([session.sent[1]!.message.content, session.sent[1]!.origin], ["Make it shorter\n\n[On the canvas: Step 2]", { kind: "human" }]);
+    assert.deepEqual([(await statusOf(id)).state, (await statusOf(id)).failure], ["running", null]);
+    // Stopping it: what it is doing stops, and it waits for a message.
+    assert.equal((await request(at("api/authoring/stop"), { cookie, method: "POST", body: { id } })).status, 200);
+    assert.equal(session.interrupted, 1);
+    await until("it stops", async () => (await statusOf(id)).state === "idle");
+    // A loop's result, from the transcript as it grows: it waits for the owner, with the note; a message it never passed on leaves it waiting.
+    const transcriptFile = path.join(transcriptFolder, `fake-session-${fakeSessions.length}.jsonl`);
+    const notification = (at: string, result: unknown) => JSON.stringify({ type: "user", timestamp: at, promptSource: "system", origin: { kind: "task-notification" }, message: { role: "user", content: `<task-notification>\n<result>${JSON.stringify(result)}</result>\n</task-notification>` } }) + "\n";
+    const later = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
+    fs.writeFileSync(transcriptFile, notification(later(1), { waiting: "owner", review_id: "r1", question: "Is this right?", document: "The note." }));
+    let waiting = await statusOf(id);
+    assert.deepEqual([waiting.state, waiting.review.review_id, waiting.review.question, waiting.note, waiting.reply_failed], ["waiting", "r1", "Is this right?", "The note.", false]);
+    fs.appendFileSync(transcriptFile, notification(later(-1), { waiting: "owner", review_id: "r1", question: "Is this right?", document: "The note." }));
+    fs.appendFileSync(transcriptFile, JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "It did not reach the loop." }] } }) + "\n");
+    waiting = await statusOf(id);
+    assert.deepEqual([waiting.state, waiting.reply_failed, waiting.last_words], ["waiting", true, "It did not reach the loop."]);
+    // And the loop's end, once it has answered.
+    fs.appendFileSync(transcriptFile, notification(later(1), { result: "finished" }));
+    const done = await statusOf(id);
+    assert.deepEqual([done.state, done.result], ["done", { result: "finished" }]);
+    // Its process dies: why comes along with the last it printed, and no session runs it any more.
+    fs.writeFileSync(transcriptFile, "");
+    session.options.stderr("the last line it printed\n");
+    session.die(new Error("Claude Code process exited with code 1"));
+    await until("the page hears it ended", () => liveEvents.at(-1)?.state === "closed");
+    const stopped = await statusOf(id);
+    assert.deepEqual([stopped.state, stopped.failure], ["stopped", "Claude Code process exited with code 1\nthe last line it printed"]);
+    // A message continues it from its transcript, as itself, under the same id.
+    const before = fakeSessions.length;
+    const continued = await answer(id, "Carry on");
+    assert.equal(continued.status, 200, continued.body);
+    assert.equal(fakeSessions.length, before + 1);
+    const resumed = fakeSessions.at(-1)!;
+    assert.deepEqual([resumed.options.resume, resumed.options.agent], [`fake-session-${before}`, "task-manager"]);
+    await until("the message reaches the session", () => resumed.sent.length === 1);
+    assert.deepEqual([resumed.sent[0]!.message.content, resumed.sent[0]!.origin], ["Carry on", { kind: "human" }]);
+    assert.deepEqual([(await statusOf(id)).state, (await statusOf(id)).failure], ["running", null]);
+    eventStream.destroy();
+    fs.rmSync(path.join(first, ".contrejour/studio/conversations.json"));
+
+    // A conversation from before this Studio started, as an earlier version recorded it: no session runs it, and the
+    // chat reads it from its transcript. Without one nothing can continue it, and the chat says where it looked.
+    const minuteAgo = new Date(Date.now() - 60_000).toISOString();
+    fs.writeFileSync(
+      path.join(first, ".contrejour/studio/conversations.json"),
+      JSON.stringify({
+        schema_version: 1,
+        conversations: ["c8", "c9"].map((name) => ({ id: name, loop: "setup", base: null, session: { id: "idle01", session_id: name === "c9" ? "sess-idle" : "sess-plain", name: "run" }, started_at: minuteAgo, sent: [{ text: "Run the setup loop.", at: minuteAgo }] })),
+      }),
+    );
+    assert.equal((await statusOf("c9")).state, "gone");
+    assert.equal(JSON.parse((await request(at("api/authoring/timeline?id=c9"), { cookie })).body).record_missing, path.join(claudeConfig, "projects"), "where Claude Code keeps transcripts: its own folder, CLAUDE_CONFIG_DIR");
+    fs.writeFileSync(path.join(transcriptFolder, "sess-plain.jsonl"), `${JSON.stringify({ type: "user", message: { role: "user", content: "Run the setup loop." } })}\n`);
+    assert.equal((await statusOf("c8")).state, "stopped");
 
     // The chat shows the session's conversation row by row, from its transcript: what the Studio asked, what the
     // owner said, what the session said and did, the loop it ran with each role, errors, and each turn's end.
@@ -386,7 +509,7 @@ else { process.stderr.write("not stood in for: " + command); process.exit(1); }
     );
     const timelineOf = async (query: string) => JSON.parse((await request(at(`api/authoring/timeline?${query}`), { cookie })).body);
     const shown = await timelineOf("id=c9");
-    assert.equal(shown.record_missing, null);
+    assert.deepEqual([shown.record_missing, shown.streaming], [null, ""]);
     assert.deepEqual(
       shown.items.map((item: { kind: string; tool?: string; status?: string }) => [item.kind, item.tool ?? item.status ?? ""].filter(Boolean).join(":")),
       ["prompt", "thinking", "tool:shell", "tool:edit", "tool:workflow", "notice", "text", "turn-end", "owner", "notice"],
@@ -413,61 +536,16 @@ else { process.stderr.write("not stood in for: " + command); process.exit(1); }
     assert.deepEqual(role.items.map((item: { kind: string }) => item.kind), ["prompt", "text"]);
     assert.equal((await request(at("api/authoring/timeline?id=c9&run=..&agent=a1"), { cookie })).status, 200, "a run that is no name reads nothing");
     assert.equal((await request(at("api/authoring/timeline?id=nope"), { cookie })).status, 404);
-    // Stopping the session where it is.
-    fs.rmSync(stoppedFile, { force: true });
+    // Stopping a conversation no session runs asks nothing of anything; one the project does not have is an error.
     assert.equal((await request(at("api/authoring/stop"), { cookie, method: "POST", body: { id: "c9" } })).status, 200);
-    assert.equal(fs.readFileSync(stoppedFile, "utf8"), "idle01\n");
+    assert.equal((await request(at("api/authoring/stop"), { cookie, method: "POST", body: { id: "nope" } })).status, 500);
     fs.rmSync(path.join(first, ".contrejour/studio/conversations.json"));
-    const store = path.join(first, ".contrejour/studio/conversations.json");
-    assert.equal(fs.existsSync(store) ? read(store).conversations.length : 0, 0, "no conversation is recorded for a session that never started");
   } finally {
     await studio.close();
   }
-  // Claude Code's trust, as the Studio records it: under Claude Code's lock, in its shape, never more than the folder.
-  const { trustFolders } = (await import(pathToFileURL(path.join(source, "dist/tools/claude-trust.js")).href)) as {
-    trustFolders(folders: string[], options?: { file?: string; waitMs?: number }): Promise<{ trusted: string[]; already: string[]; skipped: { folder: string; reason: string }[] }>;
-  };
-  const trustArea = path.join(sandbox, "trust");
-  const repository = path.join(trustArea, "repository");
-  fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
-  fs.mkdirSync(path.join(repository, "inside"));
-  const loose = path.join(trustArea, "loose");
-  fs.mkdirSync(loose);
-  // A folder inside another repository would trust all of it: left to Claude Code's own prompt.
-  let outcome = await trustFolders([path.join(repository, "inside"), repository]);
-  assert.deepEqual(outcome.trusted, [repository]);
-  assert.match(outcome.skipped[0]!.reason, /inside the git repository .*repository: trusting it would trust all of that repository/);
-  assert.deepEqual((await trustFolders([repository])).already, [repository], "trusted already: nothing written");
-  // Claude Code holding its lock: the Studio waits, then leaves the file alone.
-  const lock = `${claudeJson}.lock`;
-  fs.mkdirSync(lock);
-  const untouched = fs.readFileSync(claudeJson, "utf8");
-  outcome = await trustFolders([loose], { waitMs: 200 });
-  assert.match(outcome.skipped[0]!.reason, /held Claude Code's config .* too long/);
-  assert.equal(fs.readFileSync(claudeJson, "utf8"), untouched);
-  // A lock left by a process that is gone is taken.
-  const longAgo = new Date(Date.now() - 120_000);
-  fs.utimesSync(lock, longAgo, longAgo);
-  assert.deepEqual((await trustFolders([loose])).trusted, [loose]);
-  assert.equal(fs.existsSync(lock), false);
-  assert.ok(trustedIn(loose));
-  // Written as Claude Code writes it: two spaces, nothing after the last brace.
-  assert.ok(fs.readFileSync(claudeJson, "utf8").endsWith("}") && fs.readFileSync(claudeJson, "utf8").includes('\n  "numStartups": 7'));
-  // A config behind a link: the link stays, its target changes.
-  const target = path.join(trustArea, "target.json");
-  const link = path.join(trustArea, "link.json");
-  fs.writeFileSync(target, "{}");
-  fs.symlinkSync(target, link);
-  assert.deepEqual((await trustFolders([loose], { file: link })).trusted, [loose]);
-  assert.ok(fs.lstatSync(link).isSymbolicLink() && read(target).projects[loose].hasTrustDialogAccepted);
-  // Not JSON, or not there: nothing is written, nothing created.
-  const broken = path.join(trustArea, "broken.json");
-  fs.writeFileSync(broken, "{ not json");
-  assert.match((await trustFolders([loose], { file: broken })).skipped[0]!.reason, /not readable as JSON/);
-  assert.equal(fs.readFileSync(broken, "utf8"), "{ not json");
-  const absent = path.join(trustArea, "absent.json");
-  assert.match((await trustFolders([loose], { file: absent })).skipped[0]!.reason, /does not exist yet/);
-  assert.equal(fs.existsSync(absent), false);
+  // Closing the Studio ends its sessions; each is there to continue later.
+  assert.ok(fakeSessions.at(-1)!.closed, "the session still running ended with the Studio");
+  assert.equal(fs.existsSync(path.join(claudeConfig, ".claude.json")), false, "the Studio writes nothing in Claude Code's own config");
   // Only a project is opened: a folder the installer never made one says so, with its path, and how to make one.
   await assert.rejects(serveStudio(path.join(sandbox, "not-a-project"), { port: 0 }), /not-a-project is not a project .*Projects page/);
   // The loop on the canvas is what the owner's words change, unless they ask for another loop; a role chosen to change is changed.
@@ -476,60 +554,6 @@ else { process.stderr.write("not stood in for: " + command); process.exit(1); }
   };
   assert.match(describeRequest("loop-authoring", { name: "iterate-and-check", source: "project" }, "Add a review", []), /looking at the loop `iterate-and-check`.*unless they ask for another loop: Add a review/);
   assert.match(describeRequest("role-authoring", { name: "planner", source: "project" }, "Plan less", []), /^Change the existing role `planner`/);
-  // A turn that ended with no result: its last words are an API error it was retrying, or a tool that failed.
-  const { lastWords } = (await import(pathToFileURL(path.join(source, "dist/tools/sessions.js")).href)) as { lastWords(entries: Record<string, unknown>[]): string };
-  assert.equal(lastWords([{ type: "system", subtype: "api_error", error: { message: "Connection error.", formatted: "Connection dropped (ECONNRESET)" } }]), "API Error: Connection dropped (ECONNRESET)");
-  assert.equal(lastWords([{ type: "user", message: { content: [{ type: "tool_result", is_error: true, content: "Workflow failed: no loop setup" }] } }]), "Workflow failed: no loop setup");
-  assert.equal(lastWords([]), "");
-  // Claude Code's command on Windows, where a program on PATH starts only as an .exe: as a shell finds it, never through cmd.exe.
-  const { launchCommand } = (await import(pathToFileURL(path.join(source, "dist/tools/sessions.js")).href)) as {
-    launchCommand(argv: string[], platform?: string, env?: Record<string, string>): { file: string; args: string[]; env: Record<string, string> };
-  };
-  const windows = path.join(sandbox, "windows");
-  const npmBin = path.join(windows, "npm");
-  const npmScript = path.join(npmBin, "node_modules/@anthropic-ai/claude-code/cli.js");
-  fs.mkdirSync(path.dirname(npmScript), { recursive: true });
-  fs.writeFileSync(npmScript, "");
-  // What npm writes for a global command, and the sh script beside it that only a bash can run.
-  fs.writeFileSync(
-    path.join(npmBin, "claude.cmd"),
-    '@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js" %*\r\n',
-  );
-  fs.writeFileSync(path.join(npmBin, "claude"), "#!/bin/sh\n");
-  const onWindows = (env: Record<string, string>) => launchCommand(["claude", "agents", "--json"], "win32", env);
-  assert.deepEqual(onWindows({ PATH: npmBin, PATHEXT: ".COM;.EXE;.BAT;.CMD" }), { file: process.execPath, args: [npmScript, "agents", "--json"], env: {} }, "an npm shim runs its script with Node");
-  const exeBin = path.join(windows, "local-bin");
-  fs.mkdirSync(exeBin);
-  fs.writeFileSync(path.join(exeBin, "claude.exe"), "");
-  assert.deepEqual(onWindows({ PATH: `${exeBin};${npmBin}` }), { file: path.join(exeBin, "claude.exe"), args: ["agents", "--json"], env: {} }, "the first on PATH, as a shell finds it");
-  // A shim whose package brings its own program starts that program, not the Node it may carry.
-  const nativeBin = path.join(windows, "npm-native");
-  const nativeProgram = path.join(nativeBin, "node_modules/@anthropic-ai/claude-code/bin/claude.exe");
-  fs.mkdirSync(path.dirname(nativeProgram), { recursive: true });
-  fs.writeFileSync(nativeProgram, "");
-  fs.writeFileSync(path.join(nativeBin, "node.exe"), "");
-  fs.writeFileSync(path.join(nativeBin, "claude.cmd"), '@IF EXIST "%~dp0\\node.exe" (\r\n  "%~dp0\\node.exe" "%~dp0\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe" %*\r\n)\r\n');
-  assert.deepEqual(onWindows({ PATH: nativeBin }), { file: nativeProgram, args: ["agents", "--json"], env: {} });
-  // Named by its path, as --claude does.
-  assert.equal(launchCommand([npmScript, "agents"], "win32", {}).file, process.execPath);
-  assert.deepEqual(launchCommand([path.join(npmBin, "claude.cmd"), "agents"], "win32", {}).args, [npmScript, "agents"]);
-  // Found no such way: through Git Bash, each argument whole, staying in the project's folder and unconverted.
-  const bash = path.join(windows, "Git/bin/bash.exe");
-  fs.mkdirSync(path.dirname(bash), { recursive: true });
-  fs.writeFileSync(bash, "");
-  const viaBash = onWindows({ PATH: path.join(windows, "empty"), CLAUDE_CODE_GIT_BASH_PATH: bash });
-  assert.deepEqual([viaBash.file, viaBash.args], [bash, ["-lc", 'exec "$0" "$@"', "claude", "agents", "--json"]]);
-  assert.deepEqual([viaBash.env.CHERE_INVOKING, viaBash.env.MSYS_NO_PATHCONV], ["1", "1"]);
-  fs.mkdirSync(path.join(windows, "Git/cmd"));
-  fs.writeFileSync(path.join(windows, "Git/cmd/git.exe"), "");
-  assert.equal(onWindows({ PATH: path.join(windows, "Git/cmd") }).file, bash, "the bash beside git on PATH");
-  // WSL's bash runs Linux, not this machine's Claude Code.
-  const wsl = path.join(windows, "Windows/System32/bash.exe");
-  fs.mkdirSync(path.dirname(wsl), { recursive: true });
-  fs.writeFileSync(wsl, "");
-  assert.equal(onWindows({ PATH: path.join(windows, "empty"), CLAUDE_CODE_GIT_BASH_PATH: wsl }).file, "claude");
-  // Elsewhere a command starts as given.
-  assert.deepEqual(launchCommand(["claude", "agents"], "linux", {}), { file: "claude", args: ["agents"], env: {} });
 
   // --- the hooks: a trajectory recorded, an answer that is not the owner's refused ---
   const first = path.join(workspace, "first");

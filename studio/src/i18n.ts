@@ -28,8 +28,7 @@ const zh = {
   publish_button: "发布到社区",
   publish_hint:
     "把整个项目（流程、角色、主任务流程和参数）作为示例发布到社区库；先列出要发出的内容请你审核，审核通过才开 PR",
-  publish_launched:
-    "已在后台开始发布（会话 {session}）：先整理要发布的流程和角色并检查，然后把确切内容交给你审核。",
+  publish_launched: "已开始发布：先整理要发布的流程和角色并检查，然后把确切内容交给你审核。",
   project_empty: "空项目",
   project_empty_hint: "只有框架的角色和流程，在对话里从零搭建。",
   project_create: "新建",
@@ -107,11 +106,10 @@ const zh = {
   view_role: "查看角色",
   composer_change: "说说要怎么改；输入 @ 引用画布上的步骤、箭头或参数…",
   composer_reply: "批准、取消，或者说还要怎么改（输入 @ 引用画布上的内容）…",
+  composer_continue: "接着说（输入 @ 引用画布上的内容）…",
   authoring_started:
-    "已在后台开始修改 {loop}（会话 {session}）。创建流程的角色在按你的意见改，改好、检查过后会停下来请你审核。",
-  authoring_new: "已在后台开始创建（会话 {session}）。改好、检查过后会停下来请你审核。",
-  authoring_running: "收到，正在接着改…",
-  authoring_resumed: "后台还有一个修改在进行（会话 {session}），下面接着显示它的进度。",
+    "已开始修改 {loop}。创建流程的角色在按你的意见改，改好、检查过后会停下来请你审核。",
+  authoring_new: "已开始创建。改好、检查过后会停下来请你审核。",
   waiting: "流程停下来等你决定：",
   waiting_draft: "草稿改好了，已经画在画布上，等你决定。新建或改动的角色：{roles}",
   waiting_draft_plain: "草稿改好了，已经画在画布上，等你决定：",
@@ -125,13 +123,10 @@ const zh = {
   authoring_installed: "已经装进项目：{name}。画布上是装好的版本。",
   authoring_not_installed: "没有装进项目（{name}）：{reason}。草稿已经丢弃，项目里的流程保持原样。",
   authoring_reused: "用现有的流程 {name}，没有改动；它已经放在画布上。",
-  authoring_idle: "后台会话 {session} 停下了，但没有给出审核或结果。它最后说：",
-  authoring_idle_silent:
-    "后台会话 {session} 停下了，但没有给出审核或结果，也没留下任何话。在终端里运行 claude attach {session} 可以直接看它的情况。",
   record_missing:
     "Studio 在 Claude Code 的会话记录目录 {dir} 里没找到这个会话的记录，所以看不到它的进度和结果。如果你的 Claude Code 用 CLAUDE_CONFIG_DIR 指定了别的目录，启动 Studio 的终端里也要设成一样的。",
-  authoring_gone: "后台会话 {session} 已经不在了。",
-  failed_start: "没能启动后台会话：",
+  authoring_gone: "这个会话的记录已经不在了，没法再接着它继续。",
+  failed_start: "没能启动会话：",
   tool_shell: "命令",
   tool_read: "读取",
   tool_write: "写入",
@@ -166,7 +161,7 @@ const zh = {
   session_prompt: "Studio 让会话运行流程 {loop}",
   session_prompt_other: "Studio 发给会话的消息",
   role_task: "这个角色收到的任务",
-  session_resumed: "后台会话 {session} 还在进行，下面接着显示它的情况。",
+  session_resumed: "接上之前的会话，下面是它现在的情况。",
   run_done: "{loop} 运行结束：{result}",
   session_empty: "还没有记录，会话刚开始…",
   session_sending: "发送中…",
@@ -175,28 +170,16 @@ const zh = {
   session_stopping: "正在停止…",
   session_waiting: "停下等你决定",
   session_worked: "用时 {time}",
-  session_stopped: "会话停下了，没有给出审核或结果，上面是它最后做的事。",
-  session_attach: "在终端运行 claude attach {session} 可以直接看它。",
-  session_last_words: "它最后的输出",
+  session_stopped:
+    "这个会话已经不在运行了（Studio 重启过，或者它的进程结束了）。发一条消息就能从记录接着它继续；当时在跑的流程需要它重新发起。",
+  session_idle: "它这一轮说完了，发消息就能接着它继续。",
+  session_new: "开始新对话",
   notice_interrupted: "已中断",
   notice_compacted: "上下文已压缩",
   queue_label: "排队中，这一轮结束后发送：",
   queue_send: "排队发送",
   queue_cancel: "取消排队",
   jump_latest: "回到最新",
-  trust_needed:
-    "Claude Code 还没有信任这个项目的文件夹，Studio 也没能自动记下，所以不能在这里启动后台会话。在终端里信任一次：",
-  trust_step_open: "在终端（比如 Git Bash）里进入项目文件夹：",
-  trust_step_run:
-    "运行 claude，在提示里选「Yes, I trust this folder」（默认选中的是「No, exit」，先移到 Yes 再回车），然后输入 /exit 退出。",
-  trust_step_retry: "回到这里点「重试」。",
-  trust_step_done: "回到这里，流程就能运行了。",
-  trust_copy_command: "复制命令",
-  trust_copy_folder: "只复制文件夹路径",
-  trust_copied: "已复制",
-  trust_why:
-    "Studio 会自动信任工作区和其中的每个项目（每个项目是独立的 git 仓库，要各记一次）；这次没能记下，常见原因是这台机器上还没运行过 Claude Code，或者这个文件夹在另一个 git 仓库之内。",
-  trust_detail: "原因：{detail}",
   retry: "重试",
   draft_badge: "草稿 · 等你批准",
   draft_hint: "这是按你的意见改出的草稿，还没有装进项目。",
@@ -217,12 +200,12 @@ const zh = {
   run_button: "运行",
   trial_button: "试运行",
   trial_hint: "先静态检查，再真跑一小轮，请你判断是否符合目标，不符合就优化后再试",
-  run_title: "在后台运行 {loop}？",
+  run_title: "运行 {loop}？",
   run_body:
-    "它会在一个后台 Claude Code 会话里，以任务管理角色的身份无人值守地运行，可能持续很久，也会消耗不少用量。流程停下等你决定时，会在对话里请你回复；用对话里给出的会话编号运行 claude attach 可以实时查看。",
-  run_launched: "已在后台开始运行 {loop}（会话 {session}），画布上会标出正在进行和已经完成的步骤。",
+    "Studio 会启动一个 Claude Code 会话，以任务管理角色的身份无人值守地运行它，可能持续很久，也会消耗不少用量。流程停下等你决定时，会在对话里请你回复。它跟着 Studio 走：Studio 关掉它也会停，之后发一条消息可以接着继续。",
+  run_launched: "已开始运行 {loop}，画布上会标出正在进行和已经完成的步骤。",
   trial_launched:
-    "已在后台开始试运行 {loop}（会话 {session}）：先静态检查，再真跑一小轮，然后把它做了什么拿来请你判断是否符合你的目标；不符合的地方会先改好再试。",
+    "已开始试运行 {loop}：先静态检查，再真跑一小轮，然后把它做了什么拿来请你判断是否符合你的目标；不符合的地方会先改好再试。",
   role_edit: "在对话中修改",
   role_new_button: "新建角色",
   role_target: "接下来在对话里说的话，会用来修改角色 {role}。",
@@ -231,9 +214,9 @@ const zh = {
   target_role: "修改角色：{role}",
   target_role_new: "新建角色",
   role_started:
-    "已在后台开始修改角色 {role}（会话 {session}）。创建角色的角色会先找已有的相近角色，改好、检查过后停下来请你审核。",
+    "已开始修改角色 {role}。创建角色的角色会先找已有的相近角色，改好、检查过后停下来请你审核。",
   role_new_started:
-    "已在后台开始新建角色（会话 {session}）。它会先找已有的相近角色，在最接近的基础上写，检查过后停下来请你审核。",
+    "已开始新建角色。它会先找已有的相近角色，在最接近的基础上写，检查过后停下来请你审核。",
   view_role_draft: "查看角色草稿",
   draft_role: "草稿",
   current_role: "现在的版本",
@@ -330,7 +313,7 @@ const en: Record<TextKey, string> = {
   publish_hint:
     "Publish the whole project (its loops, roles, task loop and values) to the community library as an example; you review exactly what leaves before the pull request opens",
   publish_launched:
-    "Publishing started in the background (session {session}): what would be published is gathered and checked, then put to you for review.",
+    "Publishing started: what would be published is gathered and checked, then put to you for review.",
   project_empty: "Empty project",
   project_empty_hint: "Only the framework's roles and loops; build it from the chat.",
   project_create: "Create",
@@ -411,13 +394,10 @@ const en: Record<TextKey, string> = {
   view_role: "View the role",
   composer_change: "Say how to change it; type @ to point at steps, arrows or parameters…",
   composer_reply: "Approve, cancel, or say what else to change (type @ to point at the canvas)…",
+  composer_continue: "Carry on (type @ to point at the canvas)…",
   authoring_started:
-    "Changing {loop} in the background (session {session}). The loop-writing roles work from your words, check the draft and stop for your review.",
-  authoring_new:
-    "Creating it in the background (session {session}); it stops for your review once drafted and checked.",
-  authoring_running: "Got it, carrying on…",
-  authoring_resumed:
-    "A change is still going on in the background (session {session}); its progress follows.",
+    "Changing {loop}. The loop-writing roles work from your words, check the draft and stop for your review.",
+  authoring_new: "Creating it; it stops for your review once drafted and checked.",
   waiting: "The loop stopped for your decision:",
   waiting_draft:
     "The draft is ready and drawn on the canvas; your decision. Roles added or changed: {roles}",
@@ -434,13 +414,10 @@ const en: Record<TextKey, string> = {
   authoring_not_installed:
     "Not installed ({name}): {reason}. The draft was discarded; the project's loop is as it was.",
   authoring_reused: "Using the existing loop {name} as it is; it is on the canvas.",
-  authoring_idle: "Session {session} stopped without a review or a result. Its last words:",
-  authoring_idle_silent:
-    "Session {session} stopped without a review or a result, and said nothing. Run claude attach {session} in a terminal to look at it.",
   record_missing:
     "The Studio found no record of this session in Claude Code's folder of transcripts, {dir}, so it cannot follow its progress or see its result. If your Claude Code uses another folder through CLAUDE_CONFIG_DIR, set the same in the terminal that starts the Studio.",
-  authoring_gone: "Session {session} no longer exists.",
-  failed_start: "Could not start the background session: ",
+  authoring_gone: "This session's record is gone, so it cannot be continued.",
+  failed_start: "Could not start the session: ",
   tool_shell: "Shell",
   tool_read: "Read",
   tool_write: "Write",
@@ -475,7 +452,7 @@ const en: Record<TextKey, string> = {
   session_prompt: "The Studio asked the session to run {loop}",
   session_prompt_other: "What the Studio sent the session",
   role_task: "The task this role was given",
-  session_resumed: "Session {session} is still going on; here is where it is.",
+  session_resumed: "Picking up the earlier session; here is where it is.",
   run_done: "{loop} has finished: {result}",
   session_empty: "Nothing recorded yet; the session is starting…",
   session_sending: "Sending…",
@@ -484,28 +461,16 @@ const en: Record<TextKey, string> = {
   session_stopping: "Stopping…",
   session_waiting: "Waiting for your decision",
   session_worked: "Worked for {time}",
-  session_stopped: "The session stopped without a review or a result; above is the last it did.",
-  session_attach: "Run claude attach {session} in a terminal to look at it.",
-  session_last_words: "Its last output",
+  session_stopped:
+    "This session is no longer running: the Studio restarted, or its process ended. Send a message to continue it from its record; a loop that was running has to be started again.",
+  session_idle: "It has finished this turn; send a message to continue it.",
+  session_new: "Start a new conversation",
   notice_interrupted: "Interrupted",
   notice_compacted: "Context compacted",
   queue_label: "Queued, sent when this turn ends:",
   queue_send: "Queue",
   queue_cancel: "Remove from the queue",
   jump_latest: "Jump to latest",
-  trust_needed:
-    "Claude Code does not trust this project's folder, and the Studio could not record its trust, so it cannot start background sessions here. Trust it once in a terminal:",
-  trust_step_open: "In a terminal (Git Bash, say), go to the project's folder:",
-  trust_step_run:
-    "Run claude and choose \u201cYes, I trust this folder\u201d at its prompt (it starts on \u201cNo, exit\u201d: move to Yes, then press Enter), then type /exit.",
-  trust_step_retry: "Come back and press Try again.",
-  trust_step_done: "Come back: loops can then run.",
-  trust_copy_command: "Copy the command",
-  trust_copy_folder: "Copy only the folder's path",
-  trust_copied: "Copied",
-  trust_why:
-    "The Studio trusts its workspace and every project in it by itself (each project is a git repository of its own, so each gets its own entry); it could not this time, most often because Claude Code has not run on this machine yet, or because the folder is inside another git repository.",
-  trust_detail: "Why: {detail}",
   retry: "Try again",
   draft_badge: "Draft · waiting for you",
   draft_hint: "Drafted from your words; not installed in the project yet.",
@@ -528,13 +493,12 @@ const en: Record<TextKey, string> = {
   trial_button: "Trial",
   trial_hint:
     "Static check, then a small real run you judge against your goal; improved and tried again until it fits",
-  run_title: "Run {loop} in the background?",
+  run_title: "Run {loop}?",
   run_body:
-    "It runs unattended in a background Claude Code session, as the task manager; it may take long and use a fair amount of your usage. When the loop stops for your decision, the chat asks you; claude attach with the session id in the chat follows it live.",
-  run_launched:
-    "Running {loop} in the background (session {session}); the canvas marks the steps going on and done.",
+    "The Studio starts a Claude Code session that runs it unattended, as the task manager; it may take long and use a fair amount of your usage. When the loop stops for your decision, the chat asks you. It lives with the Studio: closing the Studio stops it, and a message afterwards continues it.",
+  run_launched: "Running {loop}; the canvas marks the steps going on and done.",
   trial_launched:
-    "Trial of {loop} started in the background (session {session}): a static check, then one small real run, whose work you then judge against your goal; what does not fit is improved before the next trial.",
+    "Trial of {loop} started: a static check, then one small real run, whose work you then judge against your goal; what does not fit is improved before the next trial.",
   role_edit: "Change it in the chat",
   role_new_button: "New role",
   role_target: "What you say next in the chat changes the role {role}.",
@@ -543,9 +507,9 @@ const en: Record<TextKey, string> = {
   target_role: "Changing role: {role}",
   target_role_new: "New role",
   role_started:
-    "Changing the role {role} in the background (session {session}). The role-writing role finds the closest roles first, then stops for your review once drafted and checked.",
+    "Changing the role {role}. The role-writing role finds the closest roles first, then stops for your review once drafted and checked.",
   role_new_started:
-    "Creating a role in the background (session {session}). It builds on the closest existing role, checks it, and stops for your review.",
+    "Creating a role. It builds on the closest existing role, checks it, and stops for your review.",
   view_role_draft: "View the role draft",
   draft_role: "Draft",
   current_role: "Current version",

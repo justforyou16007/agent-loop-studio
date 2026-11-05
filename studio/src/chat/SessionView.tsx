@@ -24,6 +24,7 @@ import { useLang } from "../i18n.js";
 import { Markdown } from "../Markdown.js";
 import type { Focus, Names } from "../types.js";
 import { Button, cx } from "../ui.js";
+import { followSessions } from "./live.js";
 import { outcomeOf } from "./outcome.js";
 import { duration, foldTurns, groupRows, summarize, type Row, type ToolItem } from "./timeline.js";
 import {
@@ -41,11 +42,18 @@ export interface PendingReply {
   at: string;
 }
 
+/** Whether these words are in the rows already: a message's text, spaced as the transcript keeps it. */
+function inRows(items: TimelineItem[], words: string): boolean {
+  const bare = (text: string) => text.replace(/\s+/g, "");
+  const said = [...items].reverse().find((item) => item.kind === "text");
+  return Boolean(said && said.kind === "text" && bare(said.text).endsWith(bare(words)));
+}
+
 /**
- * One conversation with a background session, as it goes: what the Studio
- * asked, what the session said and did, the loop's roles, the owner's replies,
- * and at its end what it waits for or how it ended. Read from the session's
- * transcript, often while it works.
+ * One conversation with a session, as it goes: what the Studio asked, what the
+ * session said and did, the words it is writing, the loop's roles, the owner's
+ * replies, and at its end what it waits for or how it ended. Read from the
+ * session's transcript whenever the session records something new.
  */
 export function SessionView({
   conversation,
@@ -54,6 +62,7 @@ export function SessionView({
   pending,
   onReply,
   onStop,
+  onNewConversation,
   onViewFiles,
   names,
   onFocus,
@@ -67,31 +76,64 @@ export function SessionView({
   /** A quick reply to the review it waits at, while it waits. */
   onReply?: (text: string) => void;
   onStop?: () => Promise<void>;
+  onNewConversation?: () => void;
   onViewFiles: (files: { name: string; text: string; original: string | null }[]) => void;
   names: Names;
   onFocus: (focus: Focus) => void;
 }) {
   const { t } = useLang();
   const [timeline, setTimeline] = useState<SessionTimeline | null>(null);
+  const [writing, setWriting] = useState("");
   const state = status?.state ?? "running";
-  // Often while it works, now and then while it waits, once when it is over.
+  // Read when the session records something, and a moment after for what it has just written; now and
+  // then as well, in case a word of that went missing; once when the conversation is over.
   useEffect(() => {
     let stopped = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
+    let reading = false;
+    let readAgain = false;
+    let settle: ReturnType<typeof setTimeout>;
+    let steps = -1;
+    const read = async () => {
+      if (reading) {
+        readAgain = true;
+        return;
+      }
+      reading = true;
       try {
         const next = await api.timeline(conversation);
-        if (!stopped) setTimeline(next);
+        if (!stopped) {
+          setTimeline(next);
+          setWriting(next.streaming);
+        }
       } catch {
         // Tried again on the next round.
       }
-      if (!stopped && live && state !== "done" && state !== "gone")
-        timer = setTimeout(() => void poll(), state === "running" ? 1500 : 5000);
+      reading = false;
+      if (readAgain && !stopped) {
+        readAgain = false;
+        void read();
+      }
     };
-    void poll();
+    void read();
+    if (!live || state === "done" || state === "gone")
+      return () => {
+        stopped = true;
+      };
+    const timer = setInterval(() => void read(), state === "running" ? 3000 : 8000);
+    const unfollow = followSessions((event) => {
+      if (event.id !== conversation) return;
+      setWriting(event.streaming);
+      if (event.steps === steps) return;
+      steps = event.steps;
+      void read();
+      clearTimeout(settle);
+      settle = setTimeout(() => void read(), 300);
+    });
     return () => {
       stopped = true;
-      clearTimeout(timer);
+      clearInterval(timer);
+      clearTimeout(settle);
+      unfollow();
     };
   }, [conversation, live, state]);
 
@@ -133,6 +175,17 @@ export function SessionView({
         names={names}
         onFocus={onFocus}
       />
+      {writing && !inRows(items, writing) && (
+        <div className="px-0.5 py-0.5">
+          <Markdown
+            text={writing}
+            roles={names.roles}
+            onRole={(name) => onFocus({ kind: "role", name })}
+            loops={names.loops}
+            onLoop={(name) => onFocus({ kind: "loop", name })}
+          />
+        </div>
+      )}
       {unseen.map((reply) => (
         <div key={reply.at} className="flex justify-end">
           <div className="max-w-[88%] rounded-2xl rounded-tr-md bg-brand-600/70 px-3.5 py-2 text-[13px] leading-5 text-white">
@@ -144,12 +197,18 @@ export function SessionView({
       {timeline?.record_missing && (
         <Notice level="warning" text={t("record_missing", { dir: timeline.record_missing })} />
       )}
+      {status?.failure &&
+        state !== "running" &&
+        !items.some((item) => item.kind === "notice" && item.text === status.failure) && (
+          <Notice level="error" text={status.failure} />
+        )}
       <Footer
         status={status}
         live={live}
         startedAt={startedAt}
         onReply={onReply}
         onStop={onStop}
+        onNewConversation={onNewConversation}
         onViewFiles={onViewFiles}
       />
     </div>
@@ -557,6 +616,7 @@ function Footer({
   startedAt,
   onReply,
   onStop,
+  onNewConversation,
   onViewFiles,
 }: {
   status: AuthoringStatus | null;
@@ -564,6 +624,7 @@ function Footer({
   startedAt: string;
   onReply?: (text: string) => void;
   onStop?: () => Promise<void>;
+  onNewConversation?: () => void;
   onViewFiles: (files: { name: string; text: string; original: string | null }[]) => void;
 }) {
   const { t } = useLang();
@@ -661,23 +722,29 @@ function Footer({
       </div>
     );
   }
-  if (status.state === "gone")
-    return <Notice level="warning" text={t("authoring_gone", { session: status.session })} />;
-  // Stopped with no result: what it said is in the rows above; how to look at it, here.
+  if (status.state === "gone") return <Notice level="warning" text={t("authoring_gone")} />;
+  // Its turn is over, or no session runs it any more: what it did is in the rows above, and a message continues it.
+  if (!live) return null;
+  const startNew = onNewConversation && (
+    <button
+      type="button"
+      onClick={onNewConversation}
+      className="shrink-0 text-brand-700 underline-offset-2 hover:underline"
+    >
+      {t("session_new")}
+    </button>
+  );
+  if (status.state === "idle")
+    return (
+      <div className="flex flex-wrap items-center gap-x-2 px-1.5 pt-0.5 text-[11.5px] text-ink-4">
+        <span>{t("session_idle")}</span>
+        {startNew}
+      </div>
+    );
   return (
     <div className="space-y-1">
-      <Notice
-        level="warning"
-        text={`${t("session_stopped")} ${t("session_attach", { session: status.session })}`}
-      />
-      {status.note && (
-        <details className="px-1.5 text-[11.5px] text-ink-4">
-          <summary className="cursor-pointer">{t("session_last_words")}</summary>
-          <div className="mt-1 max-h-48 overflow-y-auto rounded-lg border border-line bg-white px-2.5 py-1 text-ink-2">
-            <Markdown text={status.note} />
-          </div>
-        </details>
-      )}
+      <Notice level="info" text={t("session_stopped")} />
+      <div className="px-1.5 text-[11.5px]">{startNew}</div>
     </div>
   );
 }

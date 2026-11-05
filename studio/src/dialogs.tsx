@@ -221,7 +221,7 @@ export function ParamsDialog({
   );
 }
 
-/** Starting a loop in a background session: what it means, before it starts. */
+/** Starting a loop in a session: what it means, before it starts. */
 export function RunDialog({
   loop,
   open,

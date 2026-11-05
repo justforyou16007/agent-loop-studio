@@ -324,9 +324,9 @@ console.log(
 );
 // What to do next: what the package says this profile needs first, then setting up the project's workflow.
 const next = [
-  "Next: open claude in the project once and accept the folder trust prompt: background sessions start only in a trusted folder.",
+  "Next:",
   ...(packageManifest.profiles[role].next ?? []),
-  `Setting up the workflow: the Studio, node ${path.join(root, ".contrejour/dist/tools/studio.js")} --project ${root}, opens a project not set up with its setup loop, which sets up the loop it runs and its values; in a session in the project, claude "Run the setup loop" does the same.`,
+  `Setting up the workflow: the Studio, from a checkout of agent-loop-studio (npm start -- --project ${root}), opens a project not set up with its setup loop, which sets up the loop it runs and its values; in a session in the project, claude "Run the setup loop" does the same.`,
   "Loops and roles already in the project were kept as they are.",
 ];
 console.log(next.join("\n"));
