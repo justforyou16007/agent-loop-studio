@@ -27,7 +27,7 @@ import { DefinitionDialog, PreviewDialog, type LoopRef } from "./PreviewDialog.j
 import { RolesPage } from "./pages/RolesPage.js";
 import { ProjectsPage } from "./pages/ProjectsPage.js";
 import { RunsPage } from "./pages/RunsPage.js";
-import type { ChatMessage, Focus, Names, Reference } from "./types.js";
+import type { ChatMessage, Focus, Names, ProjectUpdate, Reference } from "./types.js";
 import { Button, cx, LoopBadges } from "./ui.js";
 
 type Page = "projects" | "compose" | "roles" | "runs";
@@ -60,6 +60,30 @@ function rememberChatWidth(width: number): void {
   } catch {
     // The width still holds until the page is reloaded.
   }
+}
+/** What an update wrote, as the owner reads it: the roles and loops by name, the rest counted. */
+function updatedList(
+  written: string[],
+  t: (key: TextKey, values?: Record<string, string | number>) => string,
+): string {
+  const name = (file: string) => file.slice(file.lastIndexOf("/") + 1).replace(/\.(md|js)$/, "");
+  const roles = [
+    ...new Set(written.filter((file) => file.startsWith(".claude/agents/")).map(name)),
+  ];
+  const loops = [
+    ...new Set(written.filter((file) => /^\.claude\/(loops|workflows)\//.test(file)).map(name)),
+  ];
+  const files = written.filter(
+    (file) => !/^\.claude\/(agents|loops|workflows)\//.test(file),
+  ).length;
+  const join = (names: string[]) => names.join(t("list_join"));
+  return [
+    roles.length ? t("update_roles", { names: join(roles) }) : "",
+    loops.length ? t("update_loops", { names: join(loops) }) : "",
+    files ? t("update_files", { n: files }) : "",
+  ]
+    .filter(Boolean)
+    .join(t("list_parts"));
 }
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -168,55 +192,79 @@ export function App() {
   }, []);
 
   /** The page for the project open now. */
-  const begin = useCallback(() => {
-    void load().then((data) => {
-      if (!data) return;
-      if (!storedLang()) setLang(data.project.language);
-      say({ from: "studio", key: "welcome" });
-      // A change still going on in the background is picked up where it is.
-      void api
-        .conversations()
-        .then(({ conversations }) => {
-          const open = conversations.find((entry) => ["running", "waiting"].includes(entry.state));
-          if (!open) return;
-          setConversation(open.id);
-          if (open.state === "running")
-            pendingMessage.current = say({
-              from: "studio",
-              key: "authoring_resumed",
-              values: { session: open.session },
-              pending: true,
-              progress: open.progress,
-            });
-          setStatus(open);
-        })
-        .catch(() => undefined);
-      // A project opens with its setup loop until it is set up, except one started empty in the
-      // Studio (the framework's own profile, no example): it opens blank, to be built in the chat,
-      // its setup run when the owner picks it.
-      const setup = data.loops.find((loop) => loop.kind === "setup" && loop.source === "project");
-      const startedEmpty = data.project.side === "default" && !data.project.example;
-      if (!data.project.setup_finished && setup && !startedEmpty) {
-        say({ from: "studio", key: "welcome_setup" });
-        void open({ name: setup.name, source: "project" }, true);
-        return;
-      }
-      const chosen = data.project.chosen?.loop;
-      if (chosen && data.loops.some((loop) => loop.name === chosen && loop.source === "project")) {
-        say({ from: "studio", key: "welcome_chosen", values: { loop: chosen } });
-        void open({ name: chosen, source: "project" }, true);
-        return;
-      }
-      if (startedEmpty && !data.loops.some((loop) => loop.source === "project" && !loop.framework))
-        say({ from: "studio", key: "welcome_empty" });
-    });
-  }, [load, say, open]);
+  /** The page for the project open now, and what bringing it up to the framework did when it was opened. */
+  const begin = useCallback(
+    (update?: ProjectUpdate) => {
+      void load().then((data) => {
+        if (!data) return;
+        if (!storedLang()) setLang(data.project.language);
+        say({ from: "studio", key: "welcome" });
+        if (update?.problem)
+          say({
+            from: "studio",
+            key: "project_update_failed",
+            values: { problem: update.problem },
+          });
+        else if (update?.written.length)
+          say({
+            from: "studio",
+            key: "project_updated",
+            values: { list: updatedList(update.written, t) },
+          });
+        // A change still going on in the background is picked up where it is.
+        void api
+          .conversations()
+          .then(({ conversations }) => {
+            const open = conversations.find((entry) =>
+              ["running", "waiting"].includes(entry.state),
+            );
+            if (!open) return;
+            setConversation(open.id);
+            if (open.state === "running")
+              pendingMessage.current = say({
+                from: "studio",
+                key: "authoring_resumed",
+                values: { session: open.session },
+                pending: true,
+                progress: open.progress,
+              });
+            setStatus(open);
+          })
+          .catch(() => undefined);
+        // A project opens with its setup loop until it is set up, except one started empty in the
+        // Studio (the framework's own profile, no example): it opens blank, to be built in the chat,
+        // its setup run when the owner picks it.
+        const setup = data.loops.find((loop) => loop.kind === "setup" && loop.source === "project");
+        const startedEmpty = data.project.side === "default" && !data.project.example;
+        if (!data.project.setup_finished && setup && !startedEmpty) {
+          say({ from: "studio", key: "welcome_setup" });
+          void open({ name: setup.name, source: "project" }, true);
+          return;
+        }
+        const chosen = data.project.chosen?.loop;
+        if (
+          chosen &&
+          data.loops.some((loop) => loop.name === chosen && loop.source === "project")
+        ) {
+          say({ from: "studio", key: "welcome_chosen", values: { loop: chosen } });
+          void open({ name: chosen, source: "project" }, true);
+          return;
+        }
+        if (
+          startedEmpty &&
+          !data.loops.some((loop) => loop.source === "project" && !loop.framework)
+        )
+          say({ from: "studio", key: "welcome_empty" });
+      });
+    },
+    [load, say, open],
+  );
   useEffect(() => {
     begin();
     // Runs once, when the page opens.
   }, []);
   /** Another project was opened, started or copied: everything on the page was the last one's. */
-  const switched = () => {
+  const switched = (update?: ProjectUpdate) => {
     setFlow(null);
     setMessages([]);
     setReferences([]);
@@ -227,7 +275,7 @@ export function App() {
     pendingMessage.current = null;
     handled.current = "";
     setPage("compose");
-    begin();
+    begin(update);
   };
 
   const find = async (text: string) => {

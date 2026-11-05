@@ -78,6 +78,33 @@ try {
   assert.deepEqual([shown.profile, shown.entry_role, shown.loop, shown.setup_finished], ["default", "task-manager", null, null]);
   // A project is set up once its setup hands off, which needs a task loop.
   assert.match(projectCli(plain, "finish-setup").stderr, /LOOP_NOT_SELECTED/);
+  // A role's effort goes to the model's provider as it is: medium, which some refuse, is a defect.
+  const effortRole = path.join(plain, ".claude/agents/effort-probe.md");
+  fs.writeFileSync(effortRole, fs.readFileSync(path.join(plain, ".claude/agents/task-manager.md"), "utf8").replace(/^name: .*$/m, "name: effort-probe").replace(/^---\n/, "---\neffort: medium\n"));
+  const checkedRoles = spawnSync(process.execPath, [path.join(plain, ".contrejour/dist/tools/loop-check.js"), "roles", "--project", plain], { encoding: "utf8" });
+  assert.notEqual(checkedRoles.status, 0);
+  assert.match(checkedRoles.stdout, /effort-probe[\s\S]*effort must be one of low, high, xhigh, max/);
+  fs.rmSync(effortRole);
+  // An update brings the framework's loops and roles the project still has as installed to their new version,
+  // and leaves alone what the project changed, and a loop half of which it changed.
+  const asInstalled = (relative: string, text: string) => {
+    for (const file of [path.join(plain, ".claude", relative), path.join(plain, ".contrejour/seeded", relative)]) fs.writeFileSync(file, text);
+  };
+  asInstalled("agents/task-manager.md", "an older framework's task manager\n");
+  asInstalled("agents/loop-query.md", "an older framework's loop query\n");
+  fs.writeFileSync(path.join(plain, ".claude/agents/loop-query.md"), "the project's own loop query\n");
+  asInstalled("loops/setup.md", "an older framework's setup\n");
+  fs.appendFileSync(path.join(plain, ".claude/workflows/setup.js"), "\n// the project's own change\n");
+  const reinstalled = JSON.parse(execFileSync(process.execPath, [installer, "--role", "default", "--project", plain, "--library", source], { encoding: "utf8" }).split(/^Next:/m)[0]!);
+  assert.deepEqual(reinstalled.updated, [".claude/agents/task-manager.md"]);
+  const libraryRole = fs.readFileSync(path.join(source, "library/roles/framework/task-manager.md"), "utf8");
+  assert.equal(fs.readFileSync(path.join(plain, ".claude/agents/task-manager.md"), "utf8"), libraryRole);
+  assert.equal(fs.readFileSync(path.join(plain, ".contrejour/seeded/agents/task-manager.md"), "utf8"), libraryRole, "its baseline moves with it");
+  assert.equal(fs.readFileSync(path.join(plain, ".claude/agents/loop-query.md"), "utf8"), "the project's own loop query\n");
+  assert.equal(fs.readFileSync(path.join(plain, ".claude/loops/setup.md"), "utf8"), "an older framework's setup\n", "half the loop is the project's: neither half moves");
+  for (const relative of ["agents/loop-query.md", "loops/setup.md", "workflows/setup.js"])
+    for (const file of [path.join(plain, ".claude", relative), path.join(plain, ".contrejour/seeded", relative)])
+      fs.writeFileSync(file, fs.readFileSync(path.join(source, "library", relative.startsWith("agents/") ? "roles" : "loops", "framework", path.basename(relative))));
   const refused = spawnSync(process.execPath, [installer, "--role", "worker", "--project", path.join(sandbox, "nope")], { encoding: "utf8" });
   assert.notEqual(refused.status, 0);
   assert.match(refused.stderr, /--role default/);
@@ -198,6 +225,16 @@ else { process.stderr.write("not stood in for: " + command); process.exit(1); }
     assert.equal((await request(at("api/projects/open"), { cookie, method: "POST", body: { name: "first" } })).status, 200);
     assert.equal(JSON.parse((await request(at("api/overview"), { cookie })).body).project.name, "first");
     assert.equal((await request(at("api/projects/open"), { cookie, method: "POST", body: { name: "nope" } })).status, 404);
+    // A project opened is brought up to the Studio's framework when that has moved on; a current one is not touched.
+    for (const file of [path.join(first, ".claude/agents/task-manager.md"), path.join(first, ".contrejour/seeded/agents/task-manager.md")])
+      fs.writeFileSync(file, "an older framework's task manager\n");
+    const behind = JSON.parse((await request(at("api/projects/open"), { cookie, method: "POST", body: { name: "first" } })).body);
+    assert.deepEqual(behind.update, { written: [".claude/agents/task-manager.md"], problem: null });
+    assert.equal(fs.readFileSync(path.join(first, ".claude/agents/task-manager.md"), "utf8"), fs.readFileSync(path.join(source, "library/roles/framework/task-manager.md"), "utf8"));
+    const settingsBefore = fs.statSync(path.join(first, ".claude/settings.json")).mtimeMs;
+    const current = JSON.parse((await request(at("api/projects/open"), { cookie, method: "POST", body: { name: "first" } })).body);
+    assert.deepEqual(current.update, { written: [], problem: null });
+    assert.equal(fs.statSync(path.join(first, ".claude/settings.json")).mtimeMs, settingsBefore, "a current project is not reinstalled");
 
     // The folders to choose a workspace from: full paths only.
     const listing = JSON.parse((await request(at(`api/projects/folders?path=${encodeURIComponent(workspace)}`), { cookie })).body);
@@ -495,6 +532,9 @@ else { process.stderr.write("not stood in for: " + command); process.exit(1); }
   assert.ok(fs.existsSync(path.join(follower, ".claude/agents/planner.md")));
   assert.deepEqual(read(path.join(follower, ".contrejour/loop.json")), { schema_version: 1, loop: "iterate-and-check", params: { max_rounds: 3 } });
   assert.ok(read(path.join(follower, ".contrejour/reference.json")).files.includes(".claude/agents/owner-review.md"));
+  const followerUpdate = JSON.parse(execFileSync(process.execPath, [installer, "--role", "default", "--project", follower, "--library", checkout], { encoding: "utf8" }).split(/^Next:/m)[0]!);
+  assert.deepEqual(followerUpdate.updated, [], "the example's version of a base role is the project's own");
+  assert.match(fs.readFileSync(path.join(follower, ".claude/agents/owner-review.md"), "utf8"), /A project's improvement to a base role/);
   // A folder whose reference.json names another folder is no example, wherever it is.
   const misnamed = path.join(sandbox, "misnamed");
   fs.mkdirSync(misnamed);

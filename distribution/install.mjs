@@ -104,11 +104,14 @@ if (previous?.provider !== undefined && previous.provider !== "claude") {
 const skills = ".claude/skills";
 /**
  * Loops and roles from the library are seeded: written when the project has
- * none of that name, then owned by the project (the optimizer fixes roles, the
- * owner changes loops) and never replaced or removed by an update. A project
- * gets the framework roles and its own side's roles and loops. A copy of what was
- * seeded stays under .contrejour/seeded/: the baseline that later tells what this
- * project changed from what the library changed, when it contributes back.
+ * none of that name. A copy of what was seeded stays under .contrejour/seeded/:
+ * the baseline that tells what this project changed. Once the project changes one
+ * (the optimizer fixes a role, the owner changes a loop), it is the project's own
+ * and an update never replaces it; one still as seeded is the library's as
+ * installed, and an update brings it to the library's new version, with its
+ * baseline. What the example the project started from gave is the project's own
+ * from the start. Nothing is ever removed. A project gets the framework's roles
+ * and loops and its own side's.
  */
 const sides = new Set(["framework", ...(packageManifest.profiles[role].sides ?? [])]);
 function seededTarget(relative) {
@@ -121,7 +124,40 @@ function seededTarget(relative) {
 }
 const seeded = [];
 const kept = [];
+const updated = [];
 const baselines = [];
+/** What the example the project started from gave it: the project's own, never brought to the library's version. */
+const fromExample = (() => {
+  try {
+    const recorded = JSON.parse(
+      fs.readFileSync(path.join(root, ".contrejour/reference.json"), "utf8"),
+    );
+    return new Set(
+      Array.isArray(recorded.files)
+        ? recorded.files.filter((file) => typeof file === "string")
+        : [],
+    );
+  } catch {
+    return new Set();
+  }
+})();
+/** A seeded file the project has not changed: it still equals its baseline. */
+function asSeeded(relative) {
+  const target = destination(relative);
+  const baseline = destination(`.contrejour/seeded/${relative.slice(".claude/".length)}`);
+  return (
+    fs.existsSync(target) &&
+    fs.existsSync(baseline) &&
+    digest(fs.readFileSync(target)) === digest(fs.readFileSync(baseline))
+  );
+}
+/** A loop's definition and script are one: the other half of a loop's file, or null for a role. */
+function otherHalf(relative) {
+  const loop = /^\.claude\/loops\/(.+)\.md$/.exec(relative);
+  if (loop) return `.claude/workflows/${loop[1]}.js`;
+  const script = /^\.claude\/workflows\/(.+)\.js$/.exec(relative);
+  return script ? `.claude/loops/${script[1]}.md` : null;
+}
 const manifest = JSON.parse(fs.readFileSync(path.join(source, "manifest.json"), "utf8"));
 if (manifest.format !== 1 || !Array.isArray(manifest.files))
   throw new Error("Invalid Contrejour archive manifest");
@@ -157,6 +193,21 @@ for (const entry of manifest.files) {
     const target = destination(relative);
     const baseline = destination(`.contrejour/seeded/${relative.slice(".claude/".length)}`);
     if (fs.existsSync(target)) {
+      // Still as seeded, both halves of a loop: the library's as installed, so it takes the library's new version.
+      const half = otherHalf(relative);
+      if (
+        digest(fs.readFileSync(target)) !== digest(bytes) &&
+        !fromExample.has(relative) &&
+        asSeeded(relative) &&
+        (half === null ||
+          !fs.existsSync(destination(half)) ||
+          (!fromExample.has(half) && asSeeded(half)))
+      ) {
+        updated.push(relative);
+        planned.push({ target, contents: bytes, relative });
+        baselines.push({ target: baseline, contents: bytes });
+        continue;
+      }
       kept.push(relative);
       // From a release that kept no baseline, only an unedited copy has a known one.
       if (!fs.existsSync(baseline) && digest(fs.readFileSync(target)) === digest(bytes))
@@ -263,6 +314,7 @@ console.log(
       dry_run: values["dry-run"],
       written: planned.map((entry) => entry.relative),
       seeded,
+      updated,
       kept_project_versions: kept,
       removed,
     },

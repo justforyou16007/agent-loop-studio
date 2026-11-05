@@ -2,7 +2,6 @@
 name: task-manager
 description: The role a session of a project built in the Studio enters as — runs the project's task loop and the loops the owner asks for, and carries the owner's answers into them.
 side: framework
-effort: medium
 ---
 
 # Task manager

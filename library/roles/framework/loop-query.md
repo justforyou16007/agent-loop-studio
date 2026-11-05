@@ -3,7 +3,6 @@ name: loop-query
 description: Find the loops that fit a piece of work, in this project and in the shared library — the loop a project should run, or the loops a requested loop can be built on.
 side: framework
 tools: Read, Grep, Glob, Bash
-effort: medium
 ---
 
 # Loop query

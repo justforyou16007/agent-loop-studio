@@ -85,7 +85,10 @@ export const api = {
   startAuthoring: (request: AuthoringRequest) =>
     post<{ id: string; session: string }>("/api/authoring", request),
   projects: () => get<ProjectsInfo>("/api/projects"),
-  openProject: (name: string) => post<{ current: string }>("/api/projects/open", { name }),
+  openProject: (name: string) =>
+    post<{ current: string; update?: import("./types.js").ProjectUpdate }>("/api/projects/open", {
+      name,
+    }),
   fetchCommunity: () => post<{ present: boolean }>("/api/projects/community", {}),
   newProject: (name: string, reference: string | null) =>
     post<{ current: string }>("/api/projects/new", { name, reference }),

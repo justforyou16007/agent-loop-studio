@@ -294,3 +294,66 @@ export function copyProject(workspace: string, from: string, name: string): Proj
   registerHooks(copy.root);
   return describe(copy.root);
 }
+
+/** What bringing a project up to its library checkout did: the files written, or what stood in the way. */
+export interface InstallationUpdate {
+  written: string[];
+  problem: string | null;
+}
+
+/** The installer's report: the JSON it prints before its next steps. */
+function installerReport(stdout: string): Record<string, unknown> | null {
+  const next = stdout.search(/^Next:/m);
+  try {
+    const parsed: unknown = JSON.parse(next < 0 ? stdout : stdout.slice(0, next));
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Bring a project up to the library checkout it was installed from, once that
+ * has moved on: its runtime, and the framework's loops and roles it still has as
+ * installed. The installer leaves the project's own alone (what it changed, what
+ * its example gave). A dry run comes first, so a project already current is not
+ * touched at all.
+ */
+export function updateInstallation(projectRoot: string): InstallationUpdate {
+  const root = path.resolve(projectRoot);
+  let library: string | null;
+  let profile: string;
+  try {
+    library = installedLibrary(root);
+    profile = installedRole(root);
+  } catch (error) {
+    return { written: [], problem: (error as Error).message };
+  }
+  const installer = library ? path.join(library, "distribution", "install-from-repo.mjs") : null;
+  if (!installer || !fs.existsSync(installer)) return { written: [], problem: null };
+  const run = (dry: boolean) =>
+    spawnSync(
+      process.execPath,
+      [installer, "--role", profile, "--project", root, ...(dry ? ["--dry-run"] : [])],
+      { encoding: "utf8", windowsHide: true },
+    );
+  const why = (result: ReturnType<typeof run>) =>
+    (result.stderr || result.stdout || String(result.error ?? ""))
+      .trim()
+      .split("\n")
+      .slice(-3)
+      .join(" ");
+  const dry = run(true);
+  if (dry.status !== 0) return { written: [], problem: why(dry) };
+  const planned = installerReport(dry.stdout)?.written;
+  if (!Array.isArray(planned) || planned.length === 0) return { written: [], problem: null };
+  const done = run(false);
+  if (done.status !== 0) return { written: [], problem: why(done) };
+  const written = installerReport(done.stdout)?.written;
+  return {
+    written: Array.isArray(written)
+      ? written.filter((file): file is string => typeof file === "string")
+      : [],
+    problem: null,
+  };
+}

@@ -2,7 +2,6 @@
 name: project-memory
 description: Keeps the project's memory — what worked and what did not, with why, and facts about the work — in memory/; the only role that writes it, so every other role can trust what it reads there.
 side: framework
-effort: medium
 ---
 
 # Project memory

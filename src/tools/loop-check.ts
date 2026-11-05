@@ -597,6 +597,8 @@ export interface RoleReport {
 /** Who receives a role or loop from the library: every project (`framework`), or the projects of one side. */
 export const sidesKnown = (root: string): string[] => knownSides(root);
 /** Every role file names itself after its file, describes itself, says who it serves and has the required sections. */
+/** The reasoning efforts a role may ask for that every model provider Claude Code reaches accepts. */
+const ROLE_EFFORTS = ["low", "high", "xhigh", "max"];
 export function checkRoles(root: string, only?: string[]): RoleReport[] {
   const dir = rolesDir(root);
   if (!fs.existsSync(dir)) return [];
@@ -614,6 +616,11 @@ export function checkRoles(root: string, only?: string[]): RoleReport[] {
       const sides = knownSides(root);
       if (!sides.includes(fields.side ?? ""))
         defects.push(`frontmatter side must be one of ${sides.join(", ")}`);
+      // Claude Code sends a role's effort to the model's provider as it is, and some providers refuse medium.
+      if (fields.effort !== undefined && !ROLE_EFFORTS.includes(fields.effort))
+        defects.push(
+          `frontmatter effort must be one of ${ROLE_EFFORTS.join(", ")}, or left out to use the session's own: some model providers (DeepSeek among them) refuse ${fields.effort || "an empty one"}`,
+        );
       for (const section of ROLE_SECTIONS)
         if (!new RegExp(`^##\\s+${section}\\b`, "mi").test(text))
           defects.push(`missing section "## ${section}"`);

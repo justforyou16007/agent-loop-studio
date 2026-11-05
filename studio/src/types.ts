@@ -16,6 +16,11 @@ export interface Pointable extends Reference {
 export type Focus =
   | { kind: "role" | "step" | "loop"; name: string }
   | { kind: "pointer"; reference: Reference };
+/** What bringing a project up to the Studio's framework did when it was opened: the files written, or why not. */
+export interface ProjectUpdate {
+  written: string[];
+  problem: string | null;
+}
 /** The roles and loops the project knows: their names in the chat point them out on the canvas. */
 export interface Names {
   roles: Set<string>;

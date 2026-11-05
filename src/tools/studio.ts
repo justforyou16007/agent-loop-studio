@@ -23,7 +23,14 @@ import { COMMUNITY_LIBRARY, COMMUNITY_URL, installedLibrary, isProject } from ".
 import { useLoop } from "./project-loop.js";
 import { trustFolders } from "./claude-trust.js";
 import { writeStateJsonAtomic } from "./state-file.js";
-import { copyProject, createProject, listProjects, listReferences } from "./workspace.js";
+import {
+  copyProject,
+  createProject,
+  listProjects,
+  listReferences,
+  updateInstallation,
+  type InstallationUpdate,
+} from "./workspace.js";
 import {
   answerConversation,
   conversationStatuses,
@@ -205,6 +212,8 @@ export interface Studio {
   url: string;
   /** Opens the Studio once: the first browser to use it is signed in, and the link stops working. */
   loginUrl: string;
+  /** What bringing the project it opened with up to the framework did, when it opened with one. */
+  update: InstallationUpdate | null;
   close(): Promise<void>;
 }
 
@@ -229,6 +238,8 @@ export async function serveStudio(
     throw new Error(
       `${root} is not a project (it has no .contrejour/install.json): start the Studio without --project, then create or open projects on its Projects page`,
     );
+  // The project it opens with is brought up to the framework first, as one opened later is.
+  const startUpdate = root ? updateInstallation(root) : null;
   let workspace = options.workspace
     ? path.resolve(options.workspace)
     : root
@@ -519,11 +530,14 @@ export async function serveStudio(
       cache = null;
       return json(response, 200, { deleted: name, current: root ? path.basename(root) : null });
     }
+    // A project opened is brought up to the Studio's framework first, when that has moved on since.
+    let update: InstallationUpdate | null = null;
     try {
       if (url.pathname === "/api/projects/open") {
         const found = listProjects(workspace).find((entry) => entry.name === name);
         if (!found) return json(response, 404, { error: `no project ${name}` });
         root = found.root;
+        update = updateInstallation(root);
       } else if (url.pathname === "/api/projects/new") {
         if (!library)
           return json(response, 400, { error: "no library checkout to install a project from" });
@@ -540,7 +554,7 @@ export async function serveStudio(
       return json(response, 400, { error: (error as Error).message });
     }
     cache = null;
-    return json(response, 200, { current: path.basename(root) });
+    return json(response, 200, { current: path.basename(root), ...(update ? { update } : {}) });
   }
 
   /** The chat's conversations with the authoring loops: start one, answer it, see how they stand. */
@@ -732,6 +746,7 @@ export async function serveStudio(
   return {
     url,
     loginUrl: `${url}auth?t=${loginToken}`,
+    update: startUpdate,
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections();
@@ -838,6 +853,14 @@ function cli(): void {
               `Agent Loop Studio for ${options.project ? path.basename(path.resolve(options.project)) : path.resolve(workspace!)} is running (Ctrl+C stops it).`,
               `Open this link once to sign in; it works for one browser only and is not saved anywhere:`,
               `  ${studio.loginUrl}`,
+              ...(studio.update?.written.length
+                ? [
+                    `Brought the project up to this framework: ${studio.update.written.length} files.`,
+                  ]
+                : []),
+              ...(studio.update?.problem
+                ? [`Could not bring the project up to this framework: ${studio.update.problem}`]
+                : []),
             ].join("\n"),
           );
         } catch (error) {

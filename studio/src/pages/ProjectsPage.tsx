@@ -2,12 +2,13 @@ import { Copy, DownloadCloud, FolderCog, FolderOpen, Plus, Send, Trash2 } from "
 import { useEffect, useState } from "react";
 import type { ProjectsInfo } from "../../../src/tools/studio-types.js";
 import { api } from "../api.js";
+import type { ProjectUpdate } from "../types.js";
 import { DeleteProjectDialog, WorkspaceDialog } from "../dialogs.js";
 import { useLang } from "../i18n.js";
 import { Badge, Button, cx } from "../ui.js";
 
 /** The workspace's projects: open, copy or delete one, start one from an example, or switch to another workspace. */
-export function ProjectsPage({ onOpened }: { onOpened: () => void }) {
+export function ProjectsPage({ onOpened }: { onOpened: (update?: ProjectUpdate) => void }) {
   const { t, lang } = useLang();
   const [info, setInfo] = useState<ProjectsInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -29,12 +30,13 @@ export function ProjectsPage({ onOpened }: { onOpened: () => void }) {
   useEffect(() => {
     void load();
   }, []);
-  const act = async (work: () => Promise<unknown>) => {
+  /** A project opened, made or copied; one opened may have been brought up to the framework. */
+  const act = async (work: () => Promise<{ current: string; update?: ProjectUpdate }>) => {
     setBusy(true);
     setError(null);
     try {
-      await work();
-      onOpened();
+      const done = await work();
+      onOpened(done.update);
     } catch (reason) {
       setError(t("project_failed") + (reason as Error).message);
       void load();
