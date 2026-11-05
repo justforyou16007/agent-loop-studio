@@ -768,7 +768,7 @@ export async function serveStudio(
   };
 }
 
-/** The framework's checkout this Studio runs from, when it runs from one rather than from a project's copy. */
+/** The framework's checkout this Studio runs from: the folder with its project.json and installer, above dist/. */
 function studioCheckout(): string | null {
   const checkout = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
   try {

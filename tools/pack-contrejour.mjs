@@ -15,8 +15,9 @@ const version = pkg.version;
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "contrejour-package-"));
 const stage = path.join(temp, "contrejour");
 const skills = ["shared-references"];
-// The framework's helpers; a project package adds its own next to them.
-const entries = ["tools/project-cli", "tools/hook", "tools/loop-check", "tools/publish-cli", "tools/loop-view", "tools/studio"];
+// The framework's helpers that a project's roles and hooks run; a project package adds its own next to them.
+// The Studio is not one of them: it runs only from the framework's checkout, where its Claude Agent SDK is installed.
+const entries = ["tools/project-cli", "tools/hook", "tools/loop-check", "tools/publish-cli", "tools/loop-view"];
 const visited = new Set();
 
 function copy(relative) {
@@ -36,8 +37,6 @@ function runtime(relative) {
 }
 try {
   for (const entry of entries) runtime(`dist/${entry}.js`);
-  // The Studio's page: static files its server sends, built by Vite, not traced through imports.
-  copy("dist/studio");
   for (const skill of skills) copy(`skills/${skill}`);
   copy("library");
   // Projects the Studio can start from.

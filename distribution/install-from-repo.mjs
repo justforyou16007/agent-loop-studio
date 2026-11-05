@@ -41,8 +41,6 @@ for (const relative of [
   "dist/tools/project-cli.js",
   "dist/tools/loop-check.js",
   "dist/tools/publish-cli.js",
-  "dist/tools/studio.js",
-  "dist/studio/index.html",
 ]) {
   if (!fs.existsSync(path.join(root, relative))) {
     throw new Error(

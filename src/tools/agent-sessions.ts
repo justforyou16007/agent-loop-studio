@@ -327,14 +327,14 @@ export class SessionHost {
   }
 }
 
-/** The SDK, loaded when a session first starts: only the Studio's checkout has it, not a project's copy of the helpers. */
+/** The SDK, loaded when a session first starts: the other helpers never need it. */
 async function sdkQuery(): Promise<AgentQuery> {
   try {
     const sdk = await import("@anthropic-ai/claude-agent-sdk");
     return sdk.query as AgentQuery;
   } catch (error) {
     throw new Error(
-      `this copy of the Studio cannot start sessions, because the Claude Agent SDK is not installed beside it: start the Studio from a checkout of agent-loop-studio, prepared with npm ci (${(error as Error).message})`,
+      `the Studio cannot start sessions, because the Claude Agent SDK is not installed in its checkout: run npm ci there, then npm run build, and start it again (${(error as Error).message})`,
     );
   }
 }

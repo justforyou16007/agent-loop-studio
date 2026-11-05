@@ -224,7 +224,7 @@ export function readSelectedLoop(root: string): SelectedLoop {
   if (!fs.existsSync(file))
     failA1(
       "LOOP_NOT_SELECTED",
-      "choose the loop this project runs and its parameters in the Studio (studio.js), or with project-cli.js use",
+      "choose the loop this project runs and its parameters in the Studio, or with project-cli.js use",
     );
   const value: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
   if (!isRecord(value) || typeof value.loop !== "string" || !isRecord(value.params))

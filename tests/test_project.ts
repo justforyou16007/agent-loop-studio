@@ -8,6 +8,7 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -209,6 +210,10 @@ try {
     assert.deepEqual(read(path.join(first, ".contrejour/loop.json")), { schema_version: 1, loop: "iterate-and-check", params: { max_rounds: 3 } });
     assert.equal(read(path.join(first, ".claude/settings.json")).agent, "task-manager");
     assert.ok(fs.existsSync(path.join(first, "task.md")) && fs.existsSync(path.join(first, ".git")));
+    // The project gets the helpers its roles and hooks run, never the Studio: that runs only from the checkout.
+    assert.ok(fs.existsSync(path.join(first, ".contrejour/dist/tools/hook.js")));
+    for (const part of [".contrejour/dist/tools/studio.js", ".contrejour/dist/tools/agent-sessions.js", ".contrejour/dist/studio"])
+      assert.equal(fs.existsSync(path.join(first, part)), false, part);
     for (const command of ["check", "roles"]) {
       const checked = spawnSync(process.execPath, [path.join(first, ".contrejour/dist/tools/loop-check.js"), command, "--project", first], { encoding: "utf8" });
       assert.equal(checked.status, 0, checked.stdout + checked.stderr);
@@ -277,6 +282,16 @@ try {
     const current = JSON.parse((await request(at("api/projects/open"), { cookie, method: "POST", body: { name: "first" } })).body);
     assert.deepEqual(current.update, { written: [], problem: null });
     assert.equal(fs.statSync(path.join(first, ".claude/settings.json")).mtimeMs, settingsBefore, "a current project is not reinstalled");
+    // A copy of the Studio an older framework installed goes when the project is opened, with nothing else to write.
+    const oldStudio = path.join(first, ".contrejour/dist/tools/studio.js");
+    fs.writeFileSync(oldStudio, "an older framework's Studio\n");
+    const installRecord = read(path.join(first, ".contrejour/install.json"));
+    installRecord.files[".contrejour/dist/tools/studio.js"] = crypto.createHash("sha256").update(fs.readFileSync(oldStudio)).digest("hex");
+    fs.writeFileSync(path.join(first, ".contrejour/install.json"), JSON.stringify(installRecord, null, 2));
+    const cleared = JSON.parse((await request(at("api/projects/open"), { cookie, method: "POST", body: { name: "first" } })).body);
+    assert.deepEqual(cleared.update, { written: [], problem: null });
+    assert.equal(fs.existsSync(oldStudio), false);
+    assert.equal(read(path.join(first, ".contrejour/install.json")).files[".contrejour/dist/tools/studio.js"], undefined);
 
     // The folders to choose a workspace from: full paths only.
     const listing = JSON.parse((await request(at(`api/projects/folders?path=${encodeURIComponent(workspace)}`), { cookie })).body);
