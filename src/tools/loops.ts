@@ -87,6 +87,36 @@ export function roleNames(root: string): Map<string, string> {
   return names;
 }
 
+/**
+ * A base component: a role a step calls, or a loop run as a step, that gives a
+ * task loop a capability (memory, optimization). It says so in its frontmatter,
+ * `component: <what a task loop gains by it, and where its step goes>`, so the
+ * loop-writing roles can find the ones a new task loop lacks.
+ */
+export interface Component {
+  name: string;
+  type: "role" | "loop";
+  adds: string;
+}
+/** The base components this project has: its roles and loops that declare one. */
+export function listComponents(root: string): Component[] {
+  const found: Component[] = [];
+  const roles = rolesDir(root);
+  if (fs.existsSync(roles))
+    for (const file of fs
+      .readdirSync(roles)
+      .filter((entry) => entry.endsWith(".md"))
+      .sort()) {
+      const adds = frontmatter(fs.readFileSync(path.join(roles, file), "utf8")).component;
+      if (adds) found.push({ name: file.slice(0, -3), type: "role", adds });
+    }
+  for (const name of listLoops(root)) {
+    const adds = frontmatter(fs.readFileSync(loopDefinitionPath(root, name), "utf8")).component;
+    if (adds) found.push({ name, type: "loop", adds });
+  }
+  return found;
+}
+
 export const PARAMETER_TYPES = ["integer", "number", "boolean", "string", "enum"] as const;
 /** One hyperparameter of a loop, as its definition declares it. */
 export interface LoopParameter {

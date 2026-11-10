@@ -89,6 +89,16 @@ try {
   assert.notEqual(checkedRoles.status, 0);
   assert.match(checkedRoles.stdout, /effort-probe[\s\S]*effort must be one of low, high, xhigh, max/);
   fs.rmSync(effortRole);
+  // The base components a new task loop is offered: the roles and loops that say what they add to one.
+  const components = (...extra: string[]) =>
+    (JSON.parse(execFileSync(process.execPath, [path.join(plain, ".contrejour/dist/tools/loop-check.js"), "components", "--project", plain, ...extra], { encoding: "utf8" })) as { name: string; type: string; adds: string }[]).map((entry) => `${entry.type}:${entry.name}:${entry.adds.split(" — ")[0]}`);
+  assert.deepEqual(components(), ["role:project-memory:memory", "role:trajectory-optimizer:optimization"]);
+  // A draft's are found as the project would have them once it is installed.
+  const probe = path.join(plain, ".contrejour/drafts/component-probe");
+  fs.mkdirSync(path.join(probe, "loops"), { recursive: true });
+  fs.writeFileSync(path.join(probe, "loops/component-probe.md"), "---\nname: component-probe\ncomponent: probing — a step that probes\n---\n");
+  assert.deepEqual(components("--draft", "component-probe"), [...components(), "loop:component-probe:probing"]);
+  fs.rmSync(path.join(plain, ".contrejour/drafts"), { recursive: true });
   // An update brings the framework's loops and roles the project still has as installed to their new version,
   // and leaves alone what the project changed, and a loop half of which it changed.
   const asInstalled = (relative: string, text: string) => {

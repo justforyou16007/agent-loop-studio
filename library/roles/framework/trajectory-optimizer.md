@@ -3,6 +3,7 @@ name: trajectory-optimizer
 description: Read the trajectories of a finished run of the project's task loop, judge each role against its own Evaluation section, and fix the execution problems in role files — directly, or as proposals applied in proposal-review once the owner accepts them, where the project's rules say its trajectories hold what no role may contain.
 side: framework
 effort: high
+component: optimization — the last step of a task loop (optimize, with the loop's name) judges each role of the run by its Evaluation section and fixes the roles whose trajectories show a problem, so the loop's roles get better from run to run; the loop declares the record-trajectory trigger
 ---
 
 # Trajectory optimizer
@@ -15,7 +16,7 @@ The project's rules (`.claude/skills/shared-references/project-rules.md`, when t
 
 ## Inputs
 
-- `{action: "optimize", ...}`, as the last step of a task loop, with what identifies the run (the project's rules say which fields, such as a submission id).
+- `{action: "optimize", loop, ...}`, as the last step of a task loop: `loop` is the loop's name, and what else identifies the run is what the project's rules say (such as a submission id).
 - `{action: "trial", loop, since, report_file, notes}`, the Improve step of `loop-trial`: fix the roles of `loop` from its trial run, the one whose roles finished after `since`, as the trial report and the owner's words (`notes`, verbatim) say.
 - `{action: "pending", notes}`, the first step of `proposal-review`: the proposals waiting for the owner, after revising them as the owner's `notes` ask, when there are any.
 - `{action: "apply", accepted, rejected}`, the last step of `proposal-review`: the proposal ids the owner accepted, and the rest.
@@ -27,7 +28,7 @@ The project's rules (`.claude/skills/shared-references/project-rules.md`, when t
 
 ### optimize
 
-1. Collect this run's entries from the index (all the runs that made and recorded this task, when the loop is split) and read each role's transcript.
+1. Collect this run's entries from the index: the ones the project's rules identify (all the runs that made and recorded this task, when the loop is split), or, when the rules say nothing of it, the ones recorded while the latest run of `loop` was running (their `workflows` name it). Read each role's transcript.
 2. Check each role against its Evaluation signals; note what went well and what went wrong, with evidence: the step, the tool call, the effect on the outcome.
 3. Look back through the index for the same problem in earlier runs. Act on a problem that recurs or that clearly cost this outcome; otherwise only note it.
 4. Fix the role file with a small, specific change to the steps or rules that caused the problem. Never change its Output fields (the loop depends on them) or its Writes beyond what the fix needs. Append a line under `## Changes` at the end of the file: date, evidence, what changed.

@@ -109,7 +109,8 @@ const zh = {
   composer_continue: "接着说（输入 @ 引用画布上的内容）…",
   authoring_started:
     "已开始修改 {loop}。创建流程的角色在按你的意见改，改好、检查过后会停下来请你审核。",
-  authoring_new: "已开始创建。改好、检查过后会停下来请你审核。",
+  authoring_new:
+    "已开始创建。新建的是主任务流程时，会先推荐要加上的基础组件（比如记忆、优化）请你确认；改好、检查过后再停下来请你审核。",
   waiting: "流程停下来等你决定：",
   waiting_draft: "草稿改好了，已经画在画布上，等你决定。新建或改动的角色：{roles}",
   waiting_draft_plain: "草稿改好了，已经画在画布上，等你决定：",
@@ -397,7 +398,8 @@ const en: Record<TextKey, string> = {
   composer_continue: "Carry on (type @ to point at the canvas)…",
   authoring_started:
     "Changing {loop}. The loop-writing roles work from your words, check the draft and stop for your review.",
-  authoring_new: "Creating it; it stops for your review once drafted and checked.",
+  authoring_new:
+    "Creating it. A new task loop is first offered the base components it lacks, such as memory and optimization, for you to confirm; it stops for your review once drafted and checked.",
   waiting: "The loop stopped for your decision:",
   waiting_draft:
     "The draft is ready and drawn on the canvas; your decision. Roles added or changed: {roles}",

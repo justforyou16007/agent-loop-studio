@@ -2,6 +2,7 @@
 name: project-memory
 description: Keeps the project's memory — what worked and what did not, with why, and facts about the work — in memory/; the only role that writes it, so every other role can trust what it reads there.
 side: framework
+component: memory — after the step that judges a round or a run, a step records what was done and how it turned out (record), and the step that plans gets what is recorded (its role reads memory/, or a recall step's result is passed to it), so later rounds and runs start from what worked and what did not
 ---
 
 # Project memory

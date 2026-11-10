@@ -6,7 +6,7 @@
 
 - **编辑态：Studio。** 每台机器装一次的应用，owner 在浏览器里用的控制台。它管理一个工作区里的多个项目：新建空项目、从框架示例或社区里已发布的项目新建、复制、打开。在对话框里说想要什么，它马上列出相近的流程，每个都能预览流程图，并把最接近的画到画布上，超参数排在旁边、用虚线连到它们影响的步骤。点步骤或箭头、说要怎么改，`loop-authoring` 在一个 Claude Code 会话里起草修改，改好后停下请你审核。在这里设置项目的 workflow（`setup`），把流程真跑一小轮试试（「试运行」，`loop-trial`），运行并看着它一步步执行，在对话里修改角色。项目做的优化（主要是根据轨迹修好的角色）留在项目里。
 - **发布态：社区库。** 你决定时，「发布到社区」把整个项目作为示例放进 [agent-loop-community](https://github.com/justforyou16007/agent-loop-community)：项目是做什么的、运行哪个主任务流程和参数，以及项目自己的全部流程和角色。发出前你先审核确切内容，然后开一个 PR，由社区的维护者审核合并。别的机器上的 Studio 就能从它新建项目。
-- **基础角色和流程**：`setup`（以及 `project-setup`）设置项目的 workflow：从合适的流程里找出符合你想法的主任务流程，按你的话修改或新建，定好参数，检查后交接。`loop-trial`（以及 `loop-tester`）按真实运行的方式检查一个流程：先静态检查，再真跑一小轮，请你判断是否符合目标，不符合就优化后再试。`publish`（以及 `project-publisher`，项目需要自查时还有 `publish-check`）发布项目。`loop-authoring`、`role-authoring`（以及 `loop-query`、`loop-editor`、`role-creator`），`owner-review`，`trajectory-optimizer`，`project-memory` 记下做成了什么、没做成什么及原因，`task-manager` 是会话的角色。
+- **基础角色和流程**：`setup`（以及 `project-setup`）设置项目的 workflow：从合适的流程里找出符合你想法的主任务流程，按你的话修改或新建，定好参数，检查后交接。`loop-trial`（以及 `loop-tester`）按真实运行的方式检查一个流程：先静态检查，再真跑一小轮，请你判断是否符合目标，不符合就优化后再试。`publish`（以及 `project-publisher`，项目需要自查时还有 `publish-check`）发布项目。`loop-authoring`、`role-authoring`（以及 `loop-query`、`loop-editor`、`role-creator`）新建和修改流程、角色；新建主任务流程时，会先找出项目里的基础组件（比如记忆、优化），推荐给哪些流程加上哪些，你确认后再加。`owner-review`，`trajectory-optimizer` 根据轨迹改好流程里的角色，`project-memory` 记下做成了什么、没做成什么及原因，`task-manager` 是会话的角色。
 - **检查**：`loop-check` 不调用模型，用假角色把流程脚本跑几遍、走到每个分支；角色文件检查优化器依赖的各节是否齐全。
 - **hooks** 只做记录或拦截：每个结束的角色留下轨迹；交给流程的回答必须是 owner 在流程提问之后亲手输入的消息。
 

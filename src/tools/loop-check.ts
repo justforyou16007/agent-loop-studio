@@ -7,7 +7,8 @@
  * phases, roles no answer reaches, a meta that is not a pure literal, undeclared
  * triggers, child loops that do not exist, and a script generated from an older
  * definition. `stamp` records the definition a script was generated from;
- * `roles` checks role files for the sections every role must have.
+ * `roles` checks role files for the sections every role must have;
+ * `components` lists the base components a new task loop can add.
  *
  * New and changed loops and roles are drafted in `.contrejour/drafts/<id>/`
  * (agents/, loops/, workflows/) and reach `.claude/` only through `install`,
@@ -27,6 +28,7 @@ import {
   LOOP_KINDS,
   definitionDigest,
   frontmatter,
+  listComponents,
   listLoops,
   loopDefinitionPath,
   loopParameters,
@@ -860,6 +862,25 @@ function cli(): void {
         print(
           reports,
           reports.every((entry) => entry.ok),
+        );
+      } catch (error) {
+        failed(error);
+      }
+    });
+  program
+    .command("components")
+    .description(
+      "List the base components: the roles and loops whose frontmatter says what they add to a task loop",
+    )
+    .requiredOption("--project <dir>")
+    .option("--draft <id>", "as the project would have them with this draft installed")
+    .action(async (options: { project: string; draft?: string }) => {
+      try {
+        print(
+          options.draft
+            ? await withDraft(options.project, options.draft, listComponents)
+            : listComponents(options.project),
+          true,
         );
       } catch (error) {
         failed(error);

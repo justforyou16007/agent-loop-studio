@@ -1,13 +1,14 @@
 export const meta = {
   name: "loop-authoring",
   description:
-    "Create or change a loop from the owner's description: find a base, draft on it, add the roles it needs, check, install once the owner approves; or regenerate a stale script",
+    "Create or change a loop from the owner's description: find a base, draft on it, offer a new task loop the base components it lacks, add the roles it needs, check, install once the owner approves; or regenerate a stale script",
   whenToUse:
     'Run with {"description": "<the owner\'s words>"}, then again with the owner\'s replies in answers; or with {"regenerate": "<loop>"} for a stale script.',
   phases: [
     { title: "Regenerate" },
     { title: "Find" },
     { title: "Draft" },
+    { title: "Components" },
     { title: "Roles" },
     { title: "Review" },
     { title: "Install" },
@@ -54,28 +55,68 @@ const FOUND = {
   },
   required: ["from_scratch", "reuse", "reuse_loop", "candidates"],
 };
+const MISSING_ROLES = {
+  type: "array",
+  items: {
+    type: "object",
+    properties: {
+      name: { type: "string" },
+      needs: { type: "string" },
+      library_role: { type: "string" },
+    },
+    required: ["name", "needs", "library_role"],
+  },
+};
 const DRAFTED = {
   type: "object",
   properties: {
     draft: { type: "string" },
     loop: { type: "string" },
     change: { type: "boolean" },
+    kind: { type: "string", enum: ["task", "on-request"] },
     based_on: { type: "string" },
     summary: { type: "string" },
-    missing_roles: {
+    missing_roles: MISSING_ROLES,
+  },
+  required: ["draft", "loop", "change", "kind", "based_on", "summary", "missing_roles"],
+};
+const OFFERED = {
+  type: "object",
+  properties: {
+    components: {
       type: "array",
       items: {
         type: "object",
         properties: {
           name: { type: "string" },
-          needs: { type: "string" },
-          library_role: { type: "string" },
+          type: { type: "string", enum: ["role", "loop"] },
+          adds: { type: "string" },
         },
-        required: ["name", "needs", "library_role"],
+        required: ["name", "type", "adds"],
       },
     },
+    recommendations: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          loop: { type: "string" },
+          component: { type: "string" },
+          where: { type: "string" },
+          why: { type: "string" },
+        },
+        required: ["id", "loop", "component", "where", "why"],
+      },
+    },
+    digest: { type: "string" },
   },
-  required: ["draft", "loop", "change", "based_on", "summary", "missing_roles"],
+  required: ["components", "recommendations", "digest"],
+};
+const ADDED = {
+  type: "object",
+  properties: { added: STRINGS, summary: { type: "string" }, missing_roles: MISSING_ROLES },
+  required: ["added", "summary", "missing_roles"],
 };
 const ROLE_DRAFTED = {
   type: "object",
@@ -164,6 +205,9 @@ if (found.reuse) {
 }
 
 let drafted = null;
+// The base components the owner accepted into the draft: offered once per run, kept by later drafts.
+let offered = false;
+let components = { added: [], summary: "" };
 let reason = "no draft was approved within 4 rounds";
 for (let round = 1; round <= 4; round += 1) {
   // Step 4
@@ -176,15 +220,57 @@ for (let round = 1; round <= 4; round += 1) {
       from_scratch: found.from_scratch,
       draft: drafted ? drafted.draft : null,
       notes,
+      components,
     }),
     { agentType: "loop-editor", schema: DRAFTED, phase: "Draft" },
   );
+  let missingRoles = drafted.missing_roles;
   // Step 5
+  if (!offered && !drafted.change && drafted.kind === "task") {
+    offered = true;
+    phase("Components");
+    const offer = await agent(
+      JSON.stringify({ action: "find-components", draft: drafted.draft, loop: drafted.loop }),
+      { agentType: "loop-query", schema: OFFERED, phase: "Components" },
+    );
+    if (offer.recommendations.length) {
+      const offerId = `components:${drafted.loop}:${offer.digest}`;
+      const confirmed = await review(offerId, {
+        subject: `base components for the new task loop ${drafted.loop}`,
+        request:
+          "Add the recommended base components to the draft (all of them, or the ones you name), or say what to change; cancel to go on without them. You approve the whole loop afterwards.",
+        materials: {
+          draft: `.contrejour/drafts/${drafted.draft}`,
+          components: offer.components,
+          recommendations: offer.recommendations,
+        },
+        approvable: true,
+      });
+      if (confirmed.decision === "ask") return waiting(offerId, confirmed);
+      if (confirmed.decision !== "cancel") {
+        const added = await agent(
+          JSON.stringify({
+            action: "add-components",
+            draft: drafted.draft,
+            loop: drafted.loop,
+            recommendations: offer.recommendations,
+            accepted: confirmed.accepted,
+            notes: confirmed.notes,
+            missing_roles: drafted.missing_roles,
+          }),
+          { agentType: "loop-editor", schema: ADDED, phase: "Components" },
+        );
+        components = { added: added.added, summary: added.summary };
+        missingRoles = added.missing_roles;
+      }
+    }
+  }
+  // Step 6
   phase("Roles");
-  const missing = drafted.missing_roles.slice(0, 4);
-  if (drafted.missing_roles.length > missing.length)
+  const missing = missingRoles.slice(0, 4);
+  if (missingRoles.length > missing.length)
     log(
-      `${drafted.missing_roles.length - missing.length} more missing roles were not drafted; the check reports them`,
+      `${missingRoles.length - missing.length} more missing roles were not drafted; the check reports them`,
     );
   for (const role of missing)
     await agent(
@@ -198,13 +284,13 @@ for (let round = 1; round <= 4; round += 1) {
       }),
       { agentType: "role-creator", schema: ROLE_DRAFTED, phase: "Roles" },
     );
-  // Step 6
+  // Step 7
   phase("Draft");
   const finished = await agent(
     JSON.stringify({ action: "finish", draft: drafted.draft, loop: drafted.loop }),
     { agentType: "loop-editor", schema: FINISHED, phase: "Draft" },
   );
-  // Step 7
+  // Step 8
   const id = `loop:${drafted.loop}:${finished.digest}`;
   const decided = await review(id, {
     subject: drafted.change
@@ -216,6 +302,7 @@ for (let round = 1; round <= 4; round += 1) {
       based_on: drafted.based_on,
       summary: drafted.summary,
       new_roles: missing.map((role) => role.name),
+      components,
       check: finished,
     },
     approvable: !finished.failed,
@@ -226,7 +313,7 @@ for (let round = 1; round <= 4; round += 1) {
     break;
   }
   if (decided.decision === "approve" && !finished.failed) {
-    // Step 8
+    // Step 9
     phase("Install");
     const installed = await agent(
       JSON.stringify({ action: "install", draft: drafted.draft, digest: finished.digest }),
@@ -238,13 +325,14 @@ for (let round = 1; round <= 4; round += 1) {
         installed: true,
         files: installed.installed,
         based_on: drafted.based_on,
+        components: components.added,
       };
     reason = installed.reason;
     break;
   }
   notes = decided.notes;
 }
-// Step 9
+// Step 10
 phase("Install");
 await agent(JSON.stringify({ action: "discard", draft: drafted.draft }), {
   agentType: "loop-editor",
@@ -253,4 +341,4 @@ await agent(JSON.stringify({ action: "discard", draft: drafted.draft }), {
 });
 return { loop: drafted.loop, installed: false, reason };
 
-// contrejour-loop-definition-sha256: b3ca76f0e13f9df263322f41b95a597e03c07835654bd67d32040eda64c1e07d
+// contrejour-loop-definition-sha256: 6c82a92a163c9fa3c32ce066925b2ae9d9c3db3b08c14854194358e70ff1ac54

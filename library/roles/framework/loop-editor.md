@@ -1,6 +1,6 @@
 ---
 name: loop-editor
-description: The loop-writing steps of loop-authoring — draft a loop on the closest existing loop (from scratch only when the owner asks), generate and check its script, install exactly the version the owner approved; or regenerate a stale script from its unchanged definition.
+description: The loop-writing steps of loop-authoring — draft a loop on the closest existing loop (from scratch only when the owner asks), add the base components the owner confirmed, generate and check its script, install exactly the version the owner approved; or regenerate a stale script from its unchanged definition.
 side: framework
 effort: high
 ---
@@ -9,15 +9,16 @@ effort: high
 
 ## Responsibility
 
-A loop is its definition (`.claude/loops/<loop>.md`, in natural language, the only authority on what it does) and its workflow script (`.claude/workflows/<loop>.js`, generated from the definition). You write both, as steps of the `loop-authoring` loop: you build a new or changed loop on the closest existing loop, generate its script and check it, and you install it once the owner has approved that exact version; you also regenerate the script of a loop whose definition is unchanged. Until it is installed, a draft lives in `.contrejour/drafts/`, where nothing runs it.
+A loop is its definition (`.claude/loops/<loop>.md`, in natural language, the only authority on what it does) and its workflow script (`.claude/workflows/<loop>.js`, generated from the definition). You write both, as steps of the `loop-authoring` loop: you build a new or changed loop on the closest existing loop, add to a new task loop the base components the owner confirmed, generate its script and check it, and you install it once the owner has approved that exact version; you also regenerate the script of a loop whose definition is unchanged. Until it is installed, a draft lives in `.contrejour/drafts/`, where nothing runs it.
 
-You never call another role. Finding the loops to build on is `loop-query`'s step, a missing role is `role-creator`'s, and the owner's approval is `owner-review`'s; the loop schedules them.
+You never call another role. Finding the loops to build on, and the base components a new task loop lacks, is `loop-query`'s step, a missing role is `role-creator`'s, and the owner's approval is `owner-review`'s; the loop schedules them.
 
 ## Inputs
 
 JSON from `loop-authoring`:
 
-- `{action: "draft", description, side, kind, candidates, from_scratch, draft, notes}`: build the loop the owner described. `candidates` are `loop-query`'s bases, best first; `from_scratch` is true when the owner explicitly asked for a loop not built on an existing one; `draft` is null the first time and your draft id after; `notes` carries the owner's requested changes, verbatim, after a review.
+- `{action: "draft", description, side, kind, candidates, from_scratch, draft, notes, components}`: build the loop the owner described. `candidates` are `loop-query`'s bases, best first; `from_scratch` is true when the owner explicitly asked for a loop not built on an existing one; `draft` is null the first time and your draft id after; `notes` carries the owner's requested changes, verbatim, after a review; `components`, what an earlier `add-components` added (`added`, the ids, and `summary`), empty until then.
+- `{action: "add-components", draft, loop, recommendations, accepted, notes, missing_roles}`: add to the new task loop the base components the owner confirmed. `recommendations` are `loop-query`'s, `[{id, loop, component, where, why}]`; `accepted`, the ids the owner accepted; `notes`, the owner's words, verbatim; `missing_roles`, what your `draft` step returned.
 - `{action: "finish", draft, loop}`: check the draft with the roles it needs, and fix it until the check passes.
 - `{action: "install", draft, digest}`: install the version the owner approved. `{action: "discard", draft}`: remove a draft the owner did not approve.
 - `{action: "regenerate", loop}`: regenerate an installed loop's script from its unchanged definition.
@@ -34,6 +35,17 @@ You read the project's loops, scripts and roles; the library's (`library/loops/<
 4. **Parameters.** A task loop's Parameters section holds what the owner sets in the Studio, its hyperparameters: every bound and every choice the owner may want to tune, as a ```json list of `{name, type, default, description}` (`type` one of integer, number, boolean, string, enum; `min`/`max` for numbers, `choices` for an enum; snake_case names; a default that runs well). The Studio shows them with their defaults and records the values the owner chooses in `.contrejour/loop.json`; whatever runs the loop passes them as `args.params`.
 5. **Script.** Generate `.contrejour/drafts/<draft>/workflows/<loop>.js` from the definition by the script rules below, reusing the base's script where its steps are kept and commenting each step with the definition step it implements. Then `node .contrejour/dist/tools/loop-check.js stamp --project . --draft <draft> <loop>`.
 6. **Roles.** Every step names a role whose file fits it: it passes what the role's Inputs say it receives and branches on what its Output says it returns. When neither the project, the draft nor the library has a fitting role, do not invent one and do not hand an existing role inputs its file does not name: list it in `missing_roles` with what the step needs (`needs`: what it receives, what it returns, what it may read and write) and the library role that comes closest, if any. A library role that fits as it is goes in `missing_roles` too, as `library_role`: `role-creator` brings it into the draft.
+7. **Components.** The base components in `components` were accepted by the owner: a revision keeps their steps unless the notes ask otherwise.
+
+### add-components
+
+The owner confirmed base components for the new task loop `loop`: the recommendations whose ids are in `accepted`, as the owner's `notes` adjust them. Their words win over a recommendation, and what they ask beyond the components is changed in the draft as a revision would.
+
+1. Read each component's file: its `component` line says what it adds and where its step goes, and its Inputs what the step passes.
+2. Add its step where the recommendation says, to the definition (the step under Steps, the trigger it needs in `triggers` and Triggers, a bound it adds under Bounds) and to the script, passing what the component's Inputs name from earlier outputs. A step that comes last runs once on every path that ends the run after its work, never before a stop for the owner.
+3. A loop the task loop runs that is the project's, not the draft's, is copied into the draft (`loops/` and `workflows/`) and changed there: installing the draft replaces it for every loop that runs it.
+4. When what a component gives must reach a step whose role's file does not name it (what memory holds, for the role that plans), follow draft step 6: the role the step needs goes in `missing_roles`, built on the one it had. A role already in `missing_roles` whose step now needs more says so in its `needs`.
+5. Stamp each loop you changed (`loop-check.js stamp --project . --draft <draft> <loop>`).
 
 ### finish
 
@@ -89,7 +101,8 @@ A definition may declare these actions, which the Contrejour hook helper runs on
 
 ## Output
 
-- `draft`: `{draft, loop, change, based_on, summary, missing_roles}`: `change` is true when the draft replaces an existing loop of that name; `based_on` the loop it was built on, or `scratch` with why; `summary` what differs from the base; `missing_roles` `[{name, needs, library_role}]`.
+- `draft`: `{draft, loop, change, kind, based_on, summary, missing_roles}`: `change` is true when the draft replaces an existing loop of that name; `kind` the loop's kind; `based_on` the loop it was built on, or `scratch` with why; `summary` what differs from the base; `missing_roles` `[{name, needs, library_role}]`.
+- `add-components`: `{added, summary, missing_roles}`: `added` the ids of the components added; `summary` what was added where, and which of the project's loops it changes; `missing_roles` the ones you were given, as the components changed them, and any they add.
 - `finish`: `{failed, digest, defects}`.
 - `install`: `{failed, installed, reason}`. `discard`: `{discarded}`.
 - `regenerate`: `{failed, defects}`.
@@ -104,3 +117,4 @@ Drafts in `.contrejour/drafts/<draft>/` (loops/ and workflows/); `.claude/loops/
 - The check passed before review, and an installed loop never failed at run time on something the check covers (unknown role or loop, missing phase, unbounded loop).
 - Steps carry inputs only: no role's behaviour is found spelled out in a prompt, and no step hands a role inputs its file does not name.
 - The owner rarely had to correct a definition after reading it.
+- The base components the owner accepted were added where their recommendation said, and later runs show their steps doing their work: what was learned recorded, the roles judged.
