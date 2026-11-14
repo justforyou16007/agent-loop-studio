@@ -13,6 +13,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { openingOf } from "../studio/src/opening.js";
 
 const source = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 assert.ok(fs.existsSync(path.join(source, "dist", "studio", "index.html")), "run npm run build first");
@@ -229,8 +230,11 @@ try {
     }
     const overview = JSON.parse((await request(at("api/overview"), { cookie })).body);
     assert.equal(overview.project.name, "first");
-    // Not set up yet: the page opens it with its setup loop, the framework's.
+    // Not set up, but its example chose its task loop: the page opens it on that loop, not on the framework's setup.
     assert.equal(overview.project.setup_finished, null);
+    assert.deepEqual(openingOf(overview), { key: "welcome_chosen", loop: "iterate-and-check" });
+    // Without a task loop, it would open with its setup loop.
+    assert.deepEqual(openingOf({ ...overview, project: { ...overview.project, chosen: null } }), { key: "welcome_setup", loop: "setup" });
     assert.equal(overview.loops.find((loop: { name: string }) => loop.name === "setup").kind, "setup");
     // The framework's loops and roles as installed are shown apart from the project's own; what an example gave is the project's.
     const named = (list: { name: string; framework: boolean }[], name: string) => list.find((entry) => entry.name === name)!;
@@ -241,6 +245,7 @@ try {
     assert.equal((await request(at("api/projects/open"), { cookie, method: "POST", body: { name: "plain" } })).status, 200);
     const empty = JSON.parse((await request(at("api/overview"), { cookie })).body);
     assert.equal(empty.project.example, null);
+    assert.deepEqual(openingOf(empty), { key: "welcome_empty", loop: null });
     assert.ok(empty.loops.filter((loop: { source: string }) => loop.source === "project").every((loop: { framework: boolean }) => loop.framework));
     const baseRole = path.join(plain, ".claude/agents/owner-review.md");
     const asInstalled = fs.readFileSync(baseRole, "utf8");
@@ -729,6 +734,11 @@ try {
       [["iterate-and-check", "framework"], ["maker", "community"]],
     );
     assert.equal(listed.projects.find((entry: { name: string }) => entry.name === "maker").published.name, "maker");
+    // A project started from a community project opens on the task loop it brought, not on the framework's setup.
+    assert.equal((await request(at("api/projects/open"), { cookie, method: "POST", body: { name: "follower" } })).status, 200);
+    const followed = JSON.parse((await request(at("api/overview"), { cookie })).body);
+    assert.deepEqual([followed.project.example, followed.project.setup_finished], ["maker", null]);
+    assert.deepEqual(openingOf(followed), { key: "welcome_chosen", loop: "iterate-and-check" });
   } finally {
     await studio2.close();
   }

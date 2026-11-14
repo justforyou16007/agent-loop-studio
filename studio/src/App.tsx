@@ -24,6 +24,7 @@ import { ChatPanel } from "./chat/ChatPanel.js";
 import { followSessions } from "./chat/live.js";
 import { LangContext, translate, useLang, type Lang, type TextKey } from "./i18n.js";
 import { ParamsDialog, RoleDraftDialog, RunDialog } from "./dialogs.js";
+import { openingOf } from "./opening.js";
 import { DefinitionDialog, PreviewDialog, type LoopRef } from "./PreviewDialog.js";
 import { RolesPage } from "./pages/RolesPage.js";
 import { ProjectsPage } from "./pages/ProjectsPage.js";
@@ -213,30 +214,15 @@ export function App() {
             setStatus(open);
           })
           .catch(() => undefined);
-        // A project opens with its setup loop until it is set up, except one started empty in the
-        // Studio (the framework's own profile, no example): it opens blank, to be built in the chat,
-        // its setup run when the owner picks it.
-        const setup = data.loops.find((loop) => loop.kind === "setup" && loop.source === "project");
-        const startedEmpty = data.project.side === "default" && !data.project.example;
-        if (!data.project.setup_finished && setup && !startedEmpty) {
-          say({ from: "studio", key: "welcome_setup" });
-          void open({ name: setup.name, source: "project" }, true);
-          return;
-        }
-        const chosen = data.project.chosen?.loop;
-        if (
-          chosen &&
-          data.loops.some((loop) => loop.name === chosen && loop.source === "project")
-        ) {
-          say({ from: "studio", key: "welcome_chosen", values: { loop: chosen } });
-          void open({ name: chosen, source: "project" }, true);
-          return;
-        }
-        if (
-          startedEmpty &&
-          !data.loops.some((loop) => loop.source === "project" && !loop.framework)
-        )
-          say({ from: "studio", key: "welcome_empty" });
+        // Its task loop, else its setup loop, or blank: see openingOf.
+        const opening = openingOf(data);
+        if (!opening) return;
+        say(
+          opening.key === "welcome_chosen"
+            ? { from: "studio", key: opening.key, values: { loop: opening.loop } }
+            : { from: "studio", key: opening.key },
+        );
+        if (opening.loop) void open({ name: opening.loop, source: "project" }, true);
       });
     },
     [load, say, open],
