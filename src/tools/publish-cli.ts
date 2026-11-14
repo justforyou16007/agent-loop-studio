@@ -49,6 +49,7 @@ import { projectSlug } from "./project-settings.js";
 import { writeStateJsonAtomic } from "./state-file.js";
 import { scanForThreats } from "./threat-scan.js";
 import { A1Error, failA1, isRecord } from "./validate.js";
+import { KEY_SHAPES } from "./secrets.js";
 
 type State =
   /** Sent: the community's copy of the project does not have it yet. */
@@ -352,14 +353,6 @@ function stateAgainstPublished(
   };
 }
 
-const KEY_SHAPES: readonly [RegExp, string][] = [
-  [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, "a private key"],
-  [/\bsk-[A-Za-z0-9_-]{20,}/, "an API key"],
-  [/\bgh[pousr]_[A-Za-z0-9]{20,}/, "a GitHub token"],
-  [/\bhf_[A-Za-z0-9]{20,}/, "a Hugging Face token"],
-  [/\bAKIA[0-9A-Z]{16}\b/, "an AWS key"],
-  [/\bBearer\s+[A-Za-z0-9._~+/-]{20,}/, "a bearer token"],
-];
 const MACHINE_PATH = /(?:\/home\/[\w.-]+|\/Users\/[\w.-]+|[A-Za-z]:\\Users\\[^\s\\]+)[^\s`'")]*/g;
 
 /** The keys and tokens this project holds, which must never leave in a role or loop. */

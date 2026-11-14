@@ -17,7 +17,7 @@ const stage = path.join(temp, "contrejour");
 const skills = ["shared-references"];
 // The framework's helpers that a project's roles and hooks run; a project package adds its own next to them.
 // The Studio is not one of them: it runs only from the framework's checkout, where its Claude Agent SDK is installed.
-const entries = ["tools/project-cli", "tools/hook", "tools/loop-check", "tools/publish-cli", "tools/loop-view"];
+const entries = ["tools/project-cli", "tools/hook", "tools/loop-check", "tools/publish-cli", "tools/loop-view", "tools/memory", "tools/experiments", "tools/watch"];
 const visited = new Set();
 
 function copy(relative) {

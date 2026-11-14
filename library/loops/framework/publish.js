@@ -129,18 +129,78 @@ const waiting = (id, decided) => ({
   question: decided.question,
   document: decided.document,
 });
+// Send back (the definition's Send back section): a step that cannot use an input names the step that
+// made it (`send_back.to`); that step runs again with `returned`, then the step runs again on what it
+// makes. At most SEND_BACKS times in a row; past that, or for the loop's own input (`caller`), the loop
+// ends with `sent_back`.
+const SEND_BACKS = 2;
+const sending = (schema, to) => ({
+  ...schema,
+  properties: {
+    ...schema.properties,
+    send_back: {
+      type: "object",
+      properties: {
+        needed: { type: "boolean" },
+        to: { type: "string", enum: to },
+        problems: { type: "array", items: { type: "string" } },
+      },
+      required: ["needed", "to", "problems"],
+    },
+  },
+  required: [...schema.required, "send_back"],
+});
+const step = async (name, run, redo = {}) => {
+  for (let returns = 0; ; returns += 1) {
+    const out = await run();
+    const back = out && out.send_back;
+    if (!back || !back.needed) return out;
+    const again = redo[back.to];
+    if (!again || returns >= SEND_BACKS)
+      return { sent_back: { by: name, to: back.to, problems: back.problems } };
+    const remade = await again({ by: name, problems: back.problems });
+    if (remade && (remade.sent_back || remade.waiting)) return remade;
+  }
+};
+// A child loop is a step too: when it sends back what it was given (`sent_back.to` is `caller`), `redo`
+// makes it again and the child loop runs again, at most SEND_BACKS times; what it sent back past that,
+// or about its own steps, ends this loop with `sent_back` too.
+const child = async (name, run, redo) => {
+  for (let returns = 0; ; returns += 1) {
+    const out = await run();
+    const back = out && out.sent_back;
+    if (!back) return out;
+    if (!redo || back.to !== "caller" || returns >= SEND_BACKS)
+      return { sent_back: { by: `${name}/${back.by}`, to: back.to, problems: back.problems } };
+    const remade = await redo({ by: name, problems: back.problems });
+    if (remade && (remade.sent_back || remade.waiting)) return remade;
+  }
+};
 
 let name = "";
 let exclude = [];
 let notes = "";
+// What Publish sent back to the plan: the next plan redoes it, and goes to the owner again.
+let returned = null;
+let publishReturns = 0;
 for (let attempt = 1; attempt <= 6; attempt += 1) {
   // Step 1
   phase("Plan");
-  const plan = await agent(JSON.stringify({ action: "plan", name, exclude, notes }), {
-    agentType: "project-publisher",
-    schema: PLAN,
-    phase: "Plan",
-  });
+  const makePlan = (back) =>
+    agent(JSON.stringify({ action: "plan", name, exclude, notes, returned: back }), {
+      agentType: "project-publisher",
+      schema: sending(PLAN, ["caller"]),
+      phase: "Plan",
+    });
+  let plan = await step("project-publisher:plan", () => makePlan(returned));
+  if (plan.sent_back) return { published: false, sent_back: plan.sent_back };
+  returned = null;
+  // A later step that cannot use the plan has it made again.
+  const replan = async (back) => {
+    const again = await step("project-publisher:plan", () => makePlan(back));
+    if (!again.sent_back) plan = again;
+    return again;
+  };
   name = plan.name;
   exclude = plan.exclude;
   if (plan.status === "not-eligible" || plan.status === "nothing" || plan.status === "unavailable")
@@ -158,11 +218,17 @@ for (let attempt = 1; attempt <= 6; attempt += 1) {
     if (decided.decision === "ask") return waiting(id, decided);
     if (decided.decision !== "approve")
       return { published: false, reason: "the owner did not have a checkout fetched" };
-    const cloned = await agent(JSON.stringify({ action: "clone" }), {
-      agentType: "project-publisher",
-      schema: CLONED,
-      phase: "Plan",
-    });
+    const cloned = await step(
+      "project-publisher:clone",
+      () =>
+        agent(JSON.stringify({ action: "clone", upstream: plan.upstream }), {
+          agentType: "project-publisher",
+          schema: sending(CLONED, ["project-publisher:plan"]),
+          phase: "Plan",
+        }),
+      { "project-publisher:plan": replan },
+    );
+    if (cloned.sent_back) return { published: false, sent_back: cloned.sent_back };
     if (cloned.failed) return { published: false, reason: cloned.reason };
     notes = "";
     continue;
@@ -171,12 +237,14 @@ for (let attempt = 1; attempt <= 6; attempt += 1) {
   let own = { verdict: "not-needed", findings: [] };
   if (plan.check === "required" || plan.check === "failed") {
     phase("Own check");
-    const checked = await workflow("publish-check", {
-      digest: plan.digest,
-      files: plan.previews,
-      answers,
-    });
+    // Files the check cannot use are planned again, and checked again.
+    const checked = await child(
+      "publish-check",
+      () => workflow("publish-check", { digest: plan.digest, files: plan.previews, answers }),
+      replan,
+    );
     if (checked && checked.waiting) return checked;
+    if (checked && checked.sent_back) return { published: false, sent_back: checked.sent_back };
     own = checked || { verdict: "fail", findings: ["the check did not finish"] };
   } else if (plan.check === "passed") own = { verdict: "pass", findings: [] };
   // Step 4
@@ -208,12 +276,32 @@ for (let attempt = 1; attempt <= 6; attempt += 1) {
     phase("Publish");
     const sent = await agent(
       JSON.stringify({ action: "publish", name: plan.name, digest: plan.digest, exclude }),
-      { agentType: "project-publisher", schema: PUBLISHED, phase: "Publish" },
+      {
+        agentType: "project-publisher",
+        schema: sending(PUBLISHED, ["project-publisher:plan"]),
+        phase: "Publish",
+      },
     );
+    // A plan Publish cannot use is made again, then put to the owner again: the owner approves
+    // exactly what leaves.
+    if (sent.send_back.needed) {
+      if (publishReturns >= SEND_BACKS)
+        return {
+          published: false,
+          sent_back: {
+            by: "project-publisher:publish",
+            to: "project-publisher:plan",
+            problems: sent.send_back.problems,
+          },
+        };
+      publishReturns += 1;
+      returned = { by: "project-publisher:publish", problems: sent.send_back.problems };
+      continue;
+    }
     return { published: sent.status === "pushed", ...sent };
   }
   notes = decided.notes;
 }
 return { published: false, reason: "no plan was approved within 6 rounds" };
 
-// contrejour-loop-definition-sha256: 9b2c0e1fd5b5073b550865b28330f44a013dfe13a5f6a0d36ea143502e7cf906
+// contrejour-loop-definition-sha256: 3ffb2c7009869cee8cbb8216d47e3fa028c406c932d1b81d2189d973142683ac

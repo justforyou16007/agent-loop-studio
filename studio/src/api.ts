@@ -5,6 +5,7 @@ import type {
   FolderListing,
   LoopDetail,
   LoopSource,
+  OutputList,
   Overview,
   ProjectsInfo,
   RoleDetail,
@@ -111,6 +112,13 @@ export const api = {
       `/api/authoring/tool?${query({ id, tool, run: role?.run, agent: role?.agent })}`,
     ),
   stop: (id: string) => post<{ stopped: string }>("/api/authoring/stop", { id }),
+  /** What the project's roles and loops gave, newest first, at or before a time. */
+  outputs: (filter: { before?: string; kind?: "role" | "loop"; name?: string }) =>
+    get<OutputList>(`/api/outputs?${query(filter)}`),
+  /** Every loop the Studio runs here, with how it stands. */
+  executions: () => get<{ executions: AuthoringStatus[] }>("/api/executions"),
+  /** Resume a loop run where it stopped. */
+  resume: (id: string) => post<{ id: string; run: string }>("/api/executions/resume", { id }),
   answer: (id: string, text: string, references: CanvasPointer[]) =>
     post<{ id: string }>("/api/authoring/answer", { id, text, references }),
 };

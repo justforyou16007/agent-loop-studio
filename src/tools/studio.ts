@@ -20,6 +20,7 @@ import { flowOf, searchLoops, summarize } from "./flow.js";
 import { collectView, fingerprint, type ViewData } from "./loop-view.js";
 import { SessionHost, type HostOptions, type LiveSession } from "./agent-sessions.js";
 import { COMMUNITY_LIBRARY, COMMUNITY_URL, installedLibrary, isProject } from "./installation.js";
+import { projectOutputs } from "./outputs.js";
 import { useLoop } from "./project-loop.js";
 import { writeStateJsonAtomic } from "./state-file.js";
 import {
@@ -37,6 +38,7 @@ import {
   conversationTool,
   hasConversation,
   releaseSessions,
+  resumeConversation,
   stopConversation,
   runLoop,
   startConversation,
@@ -302,6 +304,45 @@ export async function serveStudio(
     // Everything else is about the project open now.
     if (!root) return json(response, 409, { error: "open or create a project first" }, head);
     if (url.pathname.startsWith("/api/authoring")) return authoring(request, url, head, response);
+    // What the project's roles and loops gave, newest first, at or before a time.
+    if (url.pathname === "/api/outputs") {
+      if (request.method !== "GET" && request.method !== "HEAD")
+        return json(response, 405, { error: "GET only" }, head);
+      const kind = url.searchParams.get("kind");
+      const limit = Number(url.searchParams.get("limit"));
+      return json(
+        response,
+        200,
+        projectOutputs(root, {
+          before: url.searchParams.get("before") || undefined,
+          kind: kind === "role" || kind === "loop" ? kind : undefined,
+          name: url.searchParams.get("name") || undefined,
+          limit: Number.isInteger(limit) && limit > 0 ? Math.min(limit, 500) : 100,
+        }),
+        head,
+      );
+    }
+    // The loops the Studio runs, every one it keeps, with how each stands; stop one, or resume one where it stopped.
+    if (url.pathname === "/api/executions") {
+      if (request.method !== "GET" && request.method !== "HEAD")
+        return json(response, 405, { error: "GET only" }, head);
+      return json(
+        response,
+        200,
+        { executions: await conversationStatuses(root, agents, Number.MAX_SAFE_INTEGER) },
+        head,
+      );
+    }
+    if (url.pathname === "/api/executions/resume") {
+      if (request.method !== "POST") return json(response, 405, { error: "POST only" });
+      const body = await readBody(request);
+      if (typeof body.id !== "string") return json(response, 400, { error: "which conversation" });
+      try {
+        return json(response, 200, await resumeConversation(root, agents, body.id));
+      } catch (error) {
+        return json(response, 409, { error: (error as Error).message });
+      }
+    }
     if (url.pathname === "/api/trial") {
       if (request.method !== "POST") return json(response, 405, { error: "POST only" });
       const body = await readBody(request);

@@ -20,14 +20,18 @@ A project is edited and run in the Studio; it is published to the community libr
 ## Steps
 
 1. **Plan** — `project-publisher` writes what the project is, for `reference.json` (a title and a description, in Chinese and English, from the project and the owner's words), and plans the publication (`{action: "plan", name, exclude, notes}`): a status, the name it is published under, every loop and role that would leave with its judgement of each, what stays out and why, what the community's copy has that the project no longer does, the defects the check found, whether the project's own check is required, and the plan's digest. `not-eligible`, `nothing` and `unavailable` end the loop with the reason; `no-library` goes to step 2.
-2. **Checkout** — `owner-review` asks whether to fetch a checkout of the community library from the address the plan names (`review_id` `clone:<address>`). On approval `project-publisher` clones it (`{action: "clone"}`) and the loop plans again; otherwise the loop ends.
+2. **Checkout** — `owner-review` asks whether to fetch a checkout of the community library from the address the plan names (`review_id` `clone:<address>`). On approval `project-publisher` clones it (`{action: "clone", upstream}`) and the loop plans again; otherwise the loop ends.
 3. **Own check** — when the plan says the project's own check is required, the child loop `publish-check` checks exactly the files that would leave and records its verdict on the plan's digest (`{digest, files}`); its waiting result is returned as it is.
 4. **Review** — `owner-review` puts the publication to the owner (`review_id` `publish:<digest>`): what the project is, every loop and role with its judgement and warnings, what stays out and why, what would be removed, the check, and the own check's verdict with its findings. Approval publishes exactly this, and is possible only when the check found no defect and the own check, when required, passed. On `revise`, the owner's words (what to leave out or put back, a better title or description, another name) go back to step 1 as `notes`; on `cancel` the loop ends.
 5. **Publish** — on approval, `project-publisher` publishes exactly that plan (`{action: "publish", name, digest, exclude}`), and the loop ends with the pull request, or with what stood in its way.
 
 ## Bounds
 
-At most 6 plans per run: the first, and one after each review or checkout.
+At most 6 plans per run: the first, and one after each review or checkout; at most 2 send-backs in a row by any step.
+
+## Send back
+
+Every step checks what it receives against its role's Inputs. A step that cannot use an input sends it back (`send_back`) to the step that made it, which runs again with `returned` (that step and its problems); then the step runs again on what it makes. Fetching the community library may send the plan back to Plan; the project's own check (`publish-check`, a child loop) may send back the files it was given, which are planned again and checked again; Publish may send the plan back, and the new plan goes to the owner's review again, since the owner approves exactly what leaves. Plan may send back only to the caller. Past 2 send-backs in a row, or when what a step cannot use is the loop's own input, the loop ends with `sent_back`: the step, where it sent the input, and the problems.
 
 ## Waiting
 

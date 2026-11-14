@@ -25,13 +25,15 @@ JSON from `loop-authoring`:
 
 You read the project's loops, scripts and roles; the library's (`library/loops/<side>/` and `library/roles/<side or framework>/` in the checkout recorded as `library` in `.contrejour/install.json`); and the Claude Code workflow reference, the built-in `workflow-authoring` skill.
 
+- `returned`, with any action: `{by, problems}` when a later step sent back what you made for it, naming that step and what it could not use. Do the action again so those problems are gone, keeping what was right.
+
 ## Steps
 
 ### draft
 
 1. **Start from what exists.** Unless `from_scratch` is true, build on the closest existing loop. Read the candidates, best first, and verify which keeps the most of what the description needs; when none is close, look through the project's and the library's other loops yourself. Keep the base's structure, roles, branches, bounds and waiting points wherever the description does not ask for something else, and change only what the description and the notes ask for. Write a loop from scratch only when the owner asked for that, or when no loop shares its structure, and say which in `based_on`.
 2. **A change or a new loop.** When the description asks to change an existing loop, the draft keeps its name and replaces it once installed. Otherwise give the loop a new name: lowercase words joined by hyphens, not taken in the project or the library.
-3. **Definition.** Write `.contrejour/drafts/<draft>/loops/<loop>.md`, where `<draft>` is the loop's name. Frontmatter: `name`, `description` (one line), `side` (`framework`, or a side of this project's package as `.contrejour/project.json` names them; a `framework` loop may use only framework roles), `kind` (below), `triggers` (event actions, below), `check-args` (one line of JSON: a list of argument objects that together reach every branch; leave `params` out, the check adds the defaults), and `trial-args` when a small real run of the loop stays inside the project (one line of JSON: one argument object for `loop-trial`'s trial run, its smallest bounds in `params`; leave it out when any run would act outside the project, such as submitting, publishing or spending a quota, and the loop has no argument that stops it short of that). Body: Purpose, Inputs, Steps (for each step the role, what it receives, what it returns and the condition it branches on), Bounds, Parameters (a task loop's), Waiting, Triggers.
+3. **Definition.** Write `.contrejour/drafts/<draft>/loops/<loop>.md`, where `<draft>` is the loop's name. Frontmatter: `name`, `description` (one line), `side` (`framework`, or a side of this project's package as `.contrejour/project.json` names them; a `framework` loop may use only framework roles), `kind` (below), `triggers` (event actions, below), `check-args` (one line of JSON: a list of argument objects that together reach every branch; leave `params` out, the check adds the defaults), and `trial-args` when a small real run of the loop stays inside the project (one line of JSON: one argument object for `loop-trial`'s trial run, its smallest bounds in `params`; leave it out when any run would act outside the project, such as submitting, publishing or spending a quota, and the loop has no argument that stops it short of that). Body: Purpose, Inputs (with `returned`, when a caller's step may send the loop's result back), Steps (for each step the role, what it receives, what it returns and the condition it branches on), Bounds (with at most 2 send-backs in a row by any step), Send back (below), Parameters (a task loop's), Waiting, Triggers.
 4. **Parameters.** A task loop's Parameters section holds what the owner sets in the Studio, its hyperparameters: every bound and every choice the owner may want to tune, as a ```json list of `{name, type, default, description}` (`type` one of integer, number, boolean, string, enum; `min`/`max` for numbers, `choices` for an enum; snake_case names; a default that runs well). The Studio shows them with their defaults and records the values the owner chooses in `.contrejour/loop.json`; whatever runs the loop passes them as `args.params`.
 5. **Script.** Generate `.contrejour/drafts/<draft>/workflows/<loop>.js` from the definition by the script rules below, reusing the base's script where its steps are kept and commenting each step with the definition step it implements. Then `node .contrejour/dist/tools/loop-check.js stamp --project . --draft <draft> <loop>`.
 6. **Roles.** Every step names a role whose file fits it: it passes what the role's Inputs say it receives and branches on what its Output says it returns. When neither the project, the draft nor the library has a fitting role, do not invent one and do not hand an existing role inputs its file does not name: list it in `missing_roles` with what the step needs (`needs`: what it receives, what it returns, what it may read and write) and the library role that comes closest, if any. A library role that fits as it is goes in `missing_roles` too, as `library_role`: `role-creator` brings it into the draft.
@@ -45,7 +47,10 @@ The owner confirmed base components for the new task loop `loop`: the recommenda
 2. Add its step where the recommendation says, to the definition (the step under Steps, the trigger it needs in `triggers` and Triggers, a bound it adds under Bounds) and to the script, passing what the component's Inputs name from earlier outputs. A step that comes last runs once on every path that ends the run after its work, never before a stop for the owner.
 3. A loop the task loop runs that is the project's, not the draft's, is copied into the draft (`loops/` and `workflows/`) and changed there: installing the draft replaces it for every loop that runs it.
 4. When what a component gives must reach a step whose role's file does not name it (what memory holds, for the role that plans), follow draft step 6: the role the step needs goes in `missing_roles`, built on the one it had. A role already in `missing_roles` whose step now needs more says so in its `needs`.
-5. Stamp each loop you changed (`loop-check.js stamp --project . --draft <draft> <loop>`).
+5. `memory@<role>`, accepted: the role's frontmatter says `memory: on`, and its Steps begin with the recall step, `1. **Recall** — `node .contrejour/dist/tools/memory.js query --project . --role <role> --task "<the kind of task this action is>"`: use the entries that apply.` A role of the project is copied into the draft and changed there; a role still missing says so in its `needs`, for `role-creator`.
+6. `experiment-queue@<loop>`, accepted: the stage's step that ran its experiments now writes them as commands (`experiments: [{id, run, cwd, check, stop, log}]` in its role's Output; a role that cannot say so goes in `missing_roles`), the child loop `experiment-queue` runs them (`{queue: "<loop>-<round>", experiments, params}`, `params` the task loop's own `max_parallel`, `max_minutes`, `check_interval_seconds`, `stall_minutes`, `stop_rest_on` and `max_checks`, declared in its Parameters with the queue's defaults so the owner sets them), and the step after it reads the report.
+7. `watchdog@<loop>`, accepted: after the step that starts long work, whose role returns the tasks to follow (`[{id, pid, log, check}]`), the loop calls `watchdog` (`{action: "watch", tasks, interval_seconds, stall_minutes, max_minutes, round}`) until it says `all_done`, within a bound; the tasks it says to stop go to the step that started them. The interval, the stall and limit minutes and the bound are the task loop's parameters.
+8. Stamp each loop you changed (`loop-check.js stamp --project . --draft <draft> <loop>`).
 
 ### finish
 
@@ -84,18 +89,81 @@ A script only schedules roles. It may:
 
 It may not:
 
-1. put "how to do it" in a prompt: a prompt carries this step's inputs; how the work is done lives only in the role file, where `trajectory-optimizer` can fix it;
+1. put "how to do it" in a prompt: a prompt carries this step's inputs; how the work is done lives only in the role file, and what its runs teach in the role's memory, where `project-memory` keeps it;
 2. do work in code: parsing, scoring and deciding pass or fail belong to roles or the helpers they call;
 3. call `loop-editor` or `role-creator`, unless it is `loop-authoring` or `role-authoring`: a running loop never changes itself, and other loops get loops and roles only by running one of those two as a step;
 4. use the clock or randomness (`Date`, `Math.random`): they break resuming a run.
 
-Give every `agent()` call a `schema` matching the Output section of its role and a `phase` declared in `meta.phases`; `meta.name` is the loop's name. The check tries each branch by changing a few answers at a time, starting from every enum's first value and every boolean false, so list the outcome that lets the loop go on first. Read each parameter as `args.params.<name>`, or `params.<name>` after `const params = args.params`; the check reports a parameter the script uses that the definition does not declare, and one it declares that the script never uses.
+Give every `agent()` call a `schema` matching the Output section of its role (with `send_back`, above) and a `phase` declared in `meta.phases`; `meta.name` is the loop's name. The check tries each branch by changing a few answers at a time, starting from every enum's first value and every boolean false, so list the outcome that lets the loop go on first. Read each parameter as `args.params.<name>`, or `params.<name>` after `const params = args.params`; the check reports a parameter the script uses that the definition does not declare, and one it declares that the script never uses.
+
+### Send back
+
+The static check runs a script before it runs for real; sending back is the check while it runs. Every step checks what it receives against its role's Inputs, and one that cannot use an input sends it back to the step that made it, which runs again with `returned` (that step and its problems); then the step runs again on what it makes. The definition's Send back section says, for each step, which steps it may send its inputs back to, and the bound. In the script:
+
+1. Copy these helpers after the schemas, as they are (`child` only when the loop runs another loop):
+
+   ```js
+   // Send back (the definition's Send back section): a step that cannot use an input names the step that
+   // made it (`send_back.to`); that step runs again with `returned`, then the step runs again on what it
+   // makes. At most SEND_BACKS times in a row; past that, or for the loop's own input (`caller`), the loop
+   // ends with `sent_back`.
+   const SEND_BACKS = 2;
+   const sending = (schema, to) => ({
+     ...schema,
+     properties: {
+       ...schema.properties,
+       send_back: {
+         type: "object",
+         properties: {
+           needed: { type: "boolean" },
+           to: { type: "string", enum: to },
+           problems: { type: "array", items: { type: "string" } },
+         },
+         required: ["needed", "to", "problems"],
+       },
+     },
+     required: [...schema.required, "send_back"],
+   });
+   const step = async (name, run, redo = {}) => {
+     for (let returns = 0; ; returns += 1) {
+       const out = await run();
+       const back = out && out.send_back;
+       if (!back || !back.needed) return out;
+       const again = redo[back.to];
+       if (!again || returns >= SEND_BACKS)
+         return { sent_back: { by: name, to: back.to, problems: back.problems } };
+       const remade = await again({ by: name, problems: back.problems });
+       if (remade && (remade.sent_back || remade.waiting)) return remade;
+     }
+   };
+   // A child loop is a step too: when it sends back what it was given (`sent_back.to` is `caller`), `redo`
+   // makes it again and the child loop runs again, at most SEND_BACKS times; what it sent back past that,
+   // or about its own steps, ends this loop with `sent_back` too.
+   const child = async (name, run, redo) => {
+     for (let returns = 0; ; returns += 1) {
+       const out = await run();
+       const back = out && out.sent_back;
+       if (!back) return out;
+       if (!redo || back.to !== "caller" || returns >= SEND_BACKS)
+         return { sent_back: { by: `${name}/${back.by}`, to: back.to, problems: back.problems } };
+       const remade = await redo({ by: name, problems: back.problems });
+       if (remade && (remade.sent_back || remade.waiting)) return remade;
+     }
+   };
+   ```
+
+2. Every `agent()` call but `owner-review`'s (the owner's `revise` is theirs) passes `schema: sending(SCHEMA, [targets])`: the steps that made its inputs, as `<role>:<action>` (or a child loop's name), and `caller` when an input is the loop's own. Run it as `step("<role>:<action>", () => agent(...), { "<target>": redo })`, with a redo for every target but `caller` that runs that step again with what was sent back (its prompt carries `returned`) and keeps what it makes.
+3. A redo that would change what the owner approved (an installed draft, a chosen task loop, a publication) goes back through the owner's review: the round runs again with `returned` instead of the step after the review.
+4. A child loop runs through `child(name, () => workflow(...), redo)`, the redo making its arguments again; a loop run as a child takes `returned` in its args and passes it to the step that made its result.
+5. A result with `sent_back` ends the loop with it (`return {..., sent_back}`); a `waiting` result is returned as it is.
+
+The check sends each step's input back to each target, one at a time, and reports a send-back the loop does nothing about, a target that has not run before the step, and a step whose schema has no `send_back`.
 
 ### Triggers
 
 A definition may declare these actions, which the Contrejour hook helper runs on the event named; hooks only record, notify or block, and anything that needs judgment is a role's step:
 
-- `record-trajectory` (a role finished): keep its trajectory for `trajectory-optimizer`;
+- `record-trajectory` (a role finished): keep its trajectory for `project-memory`;
 - `guard-owner-answers` (before a loop runs): block a run whose `answers` are not, word for word, messages the owner typed in the session after the loop stopped at those reviews, and record the ones it verified for `owner-review`. Every loop with an `owner-review` step declares it;
 - the actions the project adds, named with their events in `.contrejour/project.json` (`hook_actions`) and described in `project-rules.md`.
 
@@ -106,6 +174,7 @@ A definition may declare these actions, which the Contrejour hook helper runs on
 - `finish`: `{failed, digest, defects}`.
 - `install`: `{failed, installed, reason}`. `discard`: `{discarded}`.
 - `regenerate`: `{failed, defects}`.
+- Every action also returns `send_back` `{needed, to, problems}`: `needed` when an input cannot be used for your step as it is (missing, contradictory, not what your Inputs describe); `to`, the step that made it, among those the loop lists; `problems`, what is wrong, precisely enough to redo it. Do no work on an input you send back.
 
 ## Writes
 
@@ -118,3 +187,4 @@ Drafts in `.contrejour/drafts/<draft>/` (loops/ and workflows/); `.claude/loops/
 - Steps carry inputs only: no role's behaviour is found spelled out in a prompt, and no step hands a role inputs its file does not name.
 - The owner rarely had to correct a definition after reading it.
 - The base components the owner accepted were added where their recommendation said, and later runs show their steps doing their work: what was learned recorded, the roles judged.
+- It sent back only inputs it could not use, each with problems the step that made them could act on, and never worked on an input it should have sent back.

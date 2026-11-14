@@ -70,11 +70,11 @@ try {
   const printed = execFileSync(process.execPath, [installer, "--role", "default", "--project", plain, "--library", source], { encoding: "utf8" });
   assert.match(printed, /npm start -- --project/);
   assert.equal(read(path.join(plain, ".contrejour/project.json")).name, "agent-loop-studio");
-  for (const role of ["task-manager", "project-memory", "owner-review", "loop-editor", "trajectory-optimizer"])
+  for (const role of ["task-manager", "project-memory", "owner-review", "loop-editor", "role-creator"])
     assert.ok(fs.existsSync(path.join(plain, ".claude/agents", `${role}.md`)), role);
-  for (const loop of ["setup", "loop-trial", "loop-authoring", "role-authoring", "publish", "publish-check"])
+  for (const loop of ["setup", "loop-trial", "loop-authoring", "role-authoring", "publish", "publish-check", "experiment-queue"])
     assert.ok(fs.existsSync(path.join(plain, ".claude/loops", `${loop}.md`)), loop);
-  for (const role of ["project-setup", "loop-tester", "project-publisher"]) assert.ok(fs.existsSync(path.join(plain, ".claude/agents", `${role}.md`)), role);
+  for (const role of ["project-setup", "loop-tester", "project-publisher", "watchdog", "experiment-runner"]) assert.ok(fs.existsSync(path.join(plain, ".claude/agents", `${role}.md`)), role);
   assert.ok(read(path.join(plain, ".claude/settings.json")).hooks.PreToolUse, "the hooks guard every loop from the start");
   assert.equal(read(path.join(plain, ".claude/settings.json")).agent, "task-manager", "every session runs as the entry role from the start");
   const projectCli = (root: string, ...args: string[]) =>
@@ -93,13 +93,119 @@ try {
   // The base components a new task loop is offered: the roles and loops that say what they add to one.
   const components = (...extra: string[]) =>
     (JSON.parse(execFileSync(process.execPath, [path.join(plain, ".contrejour/dist/tools/loop-check.js"), "components", "--project", plain, ...extra], { encoding: "utf8" })) as { name: string; type: string; adds: string }[]).map((entry) => `${entry.type}:${entry.name}:${entry.adds.split(" — ")[0]}`);
-  assert.deepEqual(components(), ["role:project-memory:memory", "role:trajectory-optimizer:optimization"]);
+  assert.deepEqual(components(), ["role:project-memory:memory and optimization", "role:watchdog:monitoring", "loop:experiment-queue:experiments"]);
   // A draft's are found as the project would have them once it is installed.
   const probe = path.join(plain, ".contrejour/drafts/component-probe");
   fs.mkdirSync(path.join(probe, "loops"), { recursive: true });
   fs.writeFileSync(path.join(probe, "loops/component-probe.md"), "---\nname: component-probe\ncomponent: probing — a step that probes\n---\n");
-  assert.deepEqual(components("--draft", "component-probe"), [...components(), "loop:component-probe:probing"]);
+  assert.deepEqual(components("--draft", "component-probe").sort(), [...components(), "loop:component-probe:probing"].sort());
   fs.rmSync(path.join(plain, ".contrejour/drafts"), { recursive: true });
+  // Every step may send back an input it cannot use: the check sends each one back to each step it may go to, and a
+  // loop that does nothing about it fails, as does a step that cannot send back and a role that says nothing of it.
+  const loopCheck = (...args: string[]) => spawnSync(process.execPath, [path.join(plain, ".contrejour/dist/tools/loop-check.js"), ...args, "--project", plain], { encoding: "utf8" });
+  const probeRole = (name: string) => `---\nname: ${name}\ndescription: a probe\nside: framework\n---\n\n## Responsibility\nA probe.\n\n## Inputs\n- \`returned\`: what a later step sent back.\n\n## Output\n- \`{done, send_back}\`.\n\n## Writes\nNothing.\n\n## Evaluation\n- None.\n`;
+  for (const name of ["maker", "user"]) fs.writeFileSync(path.join(plain, `.claude/agents/${name}.md`), probeRole(name));
+  fs.writeFileSync(path.join(plain, ".claude/loops/probe.md"), "---\nname: probe\ndescription: a probe\nside: framework\nkind: on-request\n---\n\n## Steps\n\n1. Make. 2. Use.\n\n## Send back\n\nUse may send back to Make.\n");
+  const helpers = /const SEND_BACKS = 2;[\s\S]*?const step = [\s\S]*?\n};\n/.exec(fs.readFileSync(path.join(source, "library/loops/framework/role-authoring.js"), "utf8"))![0];
+  const probeScript = (useSchema: string, redo: string) =>
+    [
+      'export const meta = { name: "probe", description: "a probe", phases: [{ title: "Work" }] };',
+      'const OUT = { type: "object", properties: { done: { type: "boolean" } }, required: ["done"] };',
+      helpers,
+      'const make = (returned) => agent(JSON.stringify({ action: "make", returned }), { agentType: "maker", schema: sending(OUT, ["caller"]), phase: "Work" });',
+      'const made = await step("maker:make", () => make(null));',
+      "if (made.sent_back) return made;",
+      `return step("user:use", () => agent(JSON.stringify({ action: "use" }), { agentType: "user", schema: ${useSchema}, phase: "Work" }), ${redo});`,
+    ].join("\n");
+  const probed = (useSchema: string, redo: string) => {
+    fs.writeFileSync(path.join(plain, ".claude/workflows/probe.js"), probeScript(useSchema, redo));
+    assert.equal(loopCheck("stamp", "probe").status, 0);
+    return JSON.parse(loopCheck("check", "probe").stdout)[0] as { ok: boolean; defects: string[] };
+  };
+  const remake = '{ "maker:make": (back) => step("maker:make", () => make(back)) }';
+  assert.match(probed('sending(OUT, ["maker:make"])', "{}").defects.join("\n"), /when user:use sends its input back to maker:make, the loop does not run maker:make again and then user:use/);
+  assert.deepEqual(probed('sending(OUT, ["maker:make"])', remake).defects, []);
+  assert.match(probed("OUT", remake).defects.join("\n"), /step "user" can send nothing back/);
+  assert.match(probed('sending(OUT, ["builder:build"])', remake).defects.join("\n"), /user:use may send its input back to builder:build, which has not run before it/);
+  // A child loop is named by a string, wherever the formatter breaks the call; a name in a variable is not one.
+  fs.writeFileSync(path.join(plain, ".claude/workflows/probe.js"), probeScript('sending(OUT, ["maker:make"])', remake));
+  loopCheck("stamp", "probe");
+  fs.writeFileSync(path.join(plain, ".claude/loops/parent.md"), "---\nname: parent\ndescription: a probe\nside: framework\nkind: on-request\n---\n\n## Steps\n\n1. The probe.\n\n## Send back\n\nWhat the probe sends back ends the loop.\n");
+  const parent = (call: string) => {
+    fs.writeFileSync(path.join(plain, ".claude/workflows/parent.js"), ['export const meta = { name: "parent", description: "a probe", phases: [{ title: "Work" }] };', `const got = await ${call};`, "if (got && got.sent_back) return { sent_back: got.sent_back };", "return got;"].join("\n"));
+    assert.equal(loopCheck("stamp", "parent").status, 0);
+    return JSON.parse(loopCheck("check", "parent").stdout)[0].defects as string[];
+  };
+  assert.ok(!parent('workflow(\n  "probe",\n  {},\n)').some((defect) => /named by a string/.test(defect)));
+  assert.ok(parent('workflow(["probe"][0], {})').some((defect) => /named by a string/.test(defect)));
+  for (const file of ["loops/parent.md", "workflows/parent.js"]) fs.rmSync(path.join(plain, ".claude", file));
+  fs.writeFileSync(path.join(plain, ".claude/agents/user.md"), probeRole("user").replace("`{done, send_back}`", "`{done}`").replace("`returned`", "nothing"));
+  assert.match(JSON.parse(loopCheck("roles", "user").stdout)[0].defects.join("\n"), /Inputs do not say what it does with `returned`[\s\S]*Output has no `send_back`/);
+  for (const file of ["agents/maker.md", "agents/user.md", "loops/probe.md", "workflows/probe.js"]) fs.rmSync(path.join(plain, ".claude", file));
+  // Each role's memory: entries inserted and updated through memory.js, found by the kind of task, never a key,
+  // never a hand edit; a role with memory on queries it first.
+  const memory = (...args: string[]) => spawnSync(process.execPath, [path.join(plain, ".contrejour/dist/tools/memory.js"), ...args, "--project", plain], { encoding: "utf8" });
+  const inserted = JSON.parse(memory("insert", "--role", "planner", "--kind", "lesson", "--title", "One module a round", "--body", "Rounds that changed several modules failed their check.", "--tasks", "plan a round", "--evidence", "run 1").stdout);
+  assert.equal(inserted.id, "one-module-a-round");
+  assert.deepEqual(JSON.parse(memory("update", "--role", "planner", "--id", "one-module-a-round", "--evidence", "run 2").stdout).evidence, ["run 1", "run 2"]);
+  memory("insert", "--role", "planner", "--kind", "fact", "--title", "部署要先构建", "--body", "部署前先运行构建。", "--tasks", "部署");
+  const found = (task: string) => (JSON.parse(memory("query", "--role", "planner", "--task", task).stdout).entries as { title: string }[]).map((entry) => entry.title);
+  assert.deepEqual(found("plan a round of the parser"), ["One module a round"]);
+  assert.deepEqual(found("这次部署"), ["部署要先构建"]);
+  assert.match(fs.readFileSync(path.join(plain, "memory/planner/index.md"), "utf8"), /\[One module a round\]\(pages\/one-module-a-round\.md\) — lesson; plan a round/);
+  assert.match(memory("insert", "--role", "planner", "--kind", "fact", "--title", "a key", "--body", "ghp_abcdefghijklmnopqrstuvwxyz0123").stderr, /SECRET_REFUSED/);
+  const events = path.join(plain, "memory/planner/events.jsonl");
+  const kept = fs.readFileSync(events, "utf8");
+  fs.writeFileSync(events, kept.replace("several modules", "two modules"));
+  assert.match(memory("query", "--role", "planner", "--task", "x").stderr, /MEMORY_CORRUPT/);
+  fs.writeFileSync(events, kept);
+  const memoryRole = (recall: boolean) => `---\nname: recaller\ndescription: a probe\nside: framework\nmemory: on\n---\n\n## Responsibility\nA probe.\n\n## Inputs\n- \`returned\`.\n\n## Steps\n${recall ? '1. **Recall** — `node .contrejour/dist/tools/memory.js query --project . --role recaller --task "probing"`.\n' : "1. Probe.\n"}\n## Output\n- \`send_back\`.\n\n## Writes\nNothing.\n\n## Evaluation\n- None.\n`;
+  fs.writeFileSync(path.join(plain, ".claude/agents/recaller.md"), memoryRole(false));
+  assert.match(JSON.parse(loopCheck("roles", "recaller").stdout)[0].defects.join("\n"), /its memory is on, but its steps do not query it first/);
+  fs.writeFileSync(path.join(plain, ".claude/agents/recaller.md"), memoryRole(true));
+  assert.deepEqual(JSON.parse(loopCheck("roles", "recaller").stdout)[0].defects, []);
+  fs.rmSync(path.join(plain, ".claude/agents/recaller.md"));
+  // A new role holds a brief process; what it knows is drafted as its first memory entries, installed with it.
+  const draft = path.join(plain, ".contrejour/drafts/scout");
+  fs.mkdirSync(path.join(draft, "agents"), { recursive: true });
+  fs.mkdirSync(path.join(draft, "memory"));
+  const scout = memoryRole(true).replaceAll("recaller", "scout");
+  fs.writeFileSync(path.join(draft, "agents/scout.md"), scout.replace("## Writes", `## Tips\n${"- Always look twice.\n".repeat(40)}\n## Writes`));
+  const drafted = () => JSON.parse(loopCheck("draft", "--draft", "scout").stdout);
+  assert.match(drafted().roles[0].defects.join("\n"), /a new role holds a brief process[\s\S]*"Tips" is knowledge/);
+  fs.writeFileSync(path.join(draft, "agents/scout.md"), scout);
+  fs.writeFileSync(path.join(draft, "memory/scout.jsonl"), `${JSON.stringify({ kind: "know-how", title: "Look twice", tasks: ["probing"], body: "A second look finds what the first missed.", evidence: ["the owner's description"] })}\n`);
+  const ready = drafted();
+  assert.ok(ready.ok, JSON.stringify(ready.roles));
+  assert.ok(ready.files.includes("memory/scout.jsonl"), "the owner approves the entries with the role");
+  const installedDraft = JSON.parse(loopCheck("install", "--draft", "scout", "--digest", ready.digest).stdout);
+  assert.deepEqual(installedDraft.installed, [".claude/agents/scout.md", "memory/scout/pages/look-twice.md"]);
+  assert.deepEqual(found("probing"), [], "the planner's memory is the planner's alone");
+  assert.deepEqual((JSON.parse(memory("query", "--role", "scout", "--task", "probing").stdout).entries as { title: string }[]).map((entry) => entry.title), ["Look twice"]);
+  fs.rmSync(path.join(plain, ".claude/agents/scout.md"));
+  fs.rmSync(path.join(plain, "memory"), { recursive: true });
+  // The experiments a queue dispatches run detached, as many at once as allowed; the watchdog's wait returns when
+  // one ends, and a stopped one stops with what it started.
+  const tool = (name: string, ...args: string[]) => spawnSync(process.execPath, [path.join(plain, `.contrejour/dist/tools/${name}.js`), ...args, "--project", plain], { encoding: "utf8" });
+  const node = (code: string) => ["node", "-e", code];
+  const specs = [
+    { id: "quick", run: node("setTimeout(() => console.log('quick done'), 1500)") },
+    { id: "slow", run: node("setInterval(() => console.log('tick'), 200)") },
+    { id: "broken", run: node("process.exit(3)") },
+  ];
+  assert.equal(tool("experiments", "add", "--queue", "probe", "--spec", JSON.stringify(specs)).status, 0);
+  assert.deepEqual(JSON.parse(tool("experiments", "start", "--queue", "probe", "--max-parallel", "2").stdout).started, ["quick", "slow"]);
+  const waited = JSON.parse(tool("watch", "--queue", "probe", "--interval", "30", "--poll", "1").stdout);
+  assert.ok(waited.waited_seconds < 30 && waited.why.some((why: string) => /^quick finished$/.test(why)), JSON.stringify(waited.why));
+  assert.deepEqual(JSON.parse(tool("experiments", "start", "--queue", "probe", "--max-parallel", "2").stdout).started, ["broken"]);
+  assert.equal(JSON.parse(tool("experiments", "stop", "--queue", "probe", "--id", "slow", "--reason", "the probe is over").stdout).state, "stopped");
+  await until("the broken experiment ends", () => JSON.parse(tool("experiments", "status", "--queue", "probe").stdout).find((row: { id: string }) => row.id === "broken").state === "failed");
+  const report = JSON.parse(tool("experiments", "report", "--queue", "probe").stdout);
+  assert.deepEqual(report.counts, { pending: 0, running: 0, finished: 1, failed: 1, stopped: 1 });
+  assert.deepEqual(report.experiments.map((row: { id: string; exit_code: number | null; reason: string | null }) => [row.id, row.exit_code, row.reason]), [["quick", 0, null], ["slow", null, "the probe is over"], ["broken", 3, "exit code 3"]]);
+  assert.equal(report.experiments[0].stdout, "quick done");
+  assert.match(tool("watch", "--queue", "probe", "--interval", "900").stderr, /at most 570 seconds/);
+  fs.rmSync(path.join(plain, ".contrejour/experiments"), { recursive: true });
   // An update brings the framework's loops and roles the project still has as installed to their new version,
   // and leaves alone what the project changed, and a loop half of which it changed.
   const asInstalled = (relative: string, text: string) => {
@@ -490,7 +596,7 @@ try {
     fs.mkdirSync(runDir, { recursive: true });
     fs.writeFileSync(
       path.join(runDir, "journal.jsonl"),
-      [{ type: "launched" }, { type: "started", key: "k1", agentId: "a1", label: "goal", phase: "Goal" }, { type: "result", key: "k1", agentId: "a1" }, { type: "started", key: "k2", agentId: "a2", label: "task loop", phase: "Task loop" }]
+      [{ type: "launched" }, { type: "started", key: "k1", agentId: "a1", label: "goal", phase: "Goal" }, { type: "result", key: "k1", agentId: "a1", result: { needs_owner: false, goal: "Plan, build and check." } }, { type: "started", key: "k2", agentId: "a2", label: "task loop", phase: "Task loop" }]
         .map((entry) => JSON.stringify(entry)).join("\n") + "\n",
     );
     fs.writeFileSync(path.join(runDir, "agent-a1.meta.json"), JSON.stringify({ agentType: "project-setup" }));
@@ -499,7 +605,7 @@ try {
       path.join(runDir, "agent-a1.jsonl"),
       [
         { type: "user", uuid: "r1", message: { role: "user", content: "{\"action\":\"goal\"}" } },
-        { type: "assistant", uuid: "r2", message: { id: "rm1", role: "assistant", content: [{ type: "text", text: "The goal is clear." }] } },
+        { type: "assistant", uuid: "r2", timestamp: "2026-11-05T08:04:00.000Z", message: { id: "rm1", role: "assistant", content: [{ type: "text", text: "The goal is clear." }] } },
       ].map((entry) => JSON.stringify(entry)).join("\n") + "\n",
     );
     const minuteAt = (minute: number) => new Date(Date.UTC(2026, 10, 5, 8, minute)).toISOString();
@@ -555,6 +661,36 @@ try {
     assert.deepEqual(role.items.map((item: { kind: string }) => item.kind), ["prompt", "text"]);
     assert.equal((await request(at("api/authoring/timeline?id=c9&run=..&agent=a1"), { cookie })).status, 200, "a run that is no name reads nothing");
     assert.equal((await request(at("api/authoring/timeline?id=nope"), { cookie })).status, 404);
+    // What the roles and loops gave, newest first: a role's whole return value from the journal, a loop's result from
+    // the notification that ended it; at or before a time, of one kind, or of one name.
+    const outputs = async (query = "") => JSON.parse((await request(at(`api/outputs?${query}`), { cookie })).body);
+    const given = await outputs();
+    assert.deepEqual(
+      given.items.map((item: { at: string; kind: string; name: string; run: string; step: string }) => [item.at, item.kind, item.name, item.run, item.step]),
+      [[minuteAt(5), "loop", "setup", "wf_run1", ""], ["2026-11-05T08:04:00.000Z", "role", "project-setup", "wf_run1", "Goal · goal"]],
+    );
+    assert.deepEqual(given.items.map((item: { output: unknown }) => item.output), [{ waiting: "owner", review_id: "r1" }, { needs_owner: false, goal: "Plan, build and check." }]);
+    assert.deepEqual([given.roles, given.loops], [["project-setup"], ["setup"]]);
+    assert.deepEqual((await outputs("before=2026-11-05T08:04:30.000Z")).items.map((item: { name: string }) => item.name), ["project-setup"]);
+    assert.deepEqual((await outputs("kind=loop")).items.map((item: { name: string }) => item.name), ["setup"]);
+    assert.deepEqual((await outputs("name=project-setup")).items.map((item: { kind: string }) => item.kind), ["role"]);
+    // Every execution with how far its latest run got; one stopped partway is resumed by its run's id.
+    const plainRun = path.join(transcriptFolder, "sess-plain", "subagents", "workflows", "wf_run2");
+    fs.mkdirSync(plainRun, { recursive: true });
+    fs.writeFileSync(path.join(plainRun, "journal.jsonl"), `${JSON.stringify({ type: "started", key: "k1", agentId: "b1", label: "goal", phase: "Goal" })}\n`);
+    fs.writeFileSync(path.join(plainRun, "agent-b1.meta.json"), JSON.stringify({ agentType: "project-setup" }));
+    const executions = async () => JSON.parse((await request(at("api/executions"), { cookie })).body).executions as { id: string; state: string; resumable: boolean; run: { id: string; steps: unknown[]; ended: boolean } | null }[];
+    const listed = await executions();
+    const c8 = listed.find((entry) => entry.id === "c8")!;
+    const c9 = listed.find((entry) => entry.id === "c9")!;
+    assert.deepEqual([c8.state, c8.run?.id, c8.run?.steps, c8.resumable], ["stopped", "wf_run2", [{ phase: "Goal", role: "project-setup", done: false }], true]);
+    assert.deepEqual([c9.state, c9.run?.id, c9.resumable], ["waiting", "wf_run1", false], "a loop waiting for the owner is answered, not resumed");
+    assert.equal((await request(at("api/executions/resume"), { cookie, method: "POST", body: { id: "c9" } })).status, 409);
+    const resumedRun = await request(at("api/executions/resume"), { cookie, method: "POST", body: { id: "c8" } });
+    assert.deepEqual(JSON.parse(resumedRun.body), { id: "c8", run: "wf_run2" });
+    const resumer = fakeSessions.at(-1)!;
+    await until("the resume reaches the session", () => resumer.sent.length === 1);
+    assert.deepEqual([resumer.options.resume, resumer.sent[0]!.message.content, resumer.sent[0]!.origin], ["sess-plain", "Resume the run wf_run2 of the setup loop where it stopped, with the arguments it was started with.", undefined], "the Studio's own words, in the conversation's session");
     // Stopping a conversation no session runs asks nothing of anything; one the project does not have is an error.
     assert.equal((await request(at("api/authoring/stop"), { cookie, method: "POST", body: { id: "c9" } })).status, 200);
     assert.equal((await request(at("api/authoring/stop"), { cookie, method: "POST", body: { id: "nope" } })).status, 500);

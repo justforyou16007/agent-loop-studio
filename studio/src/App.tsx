@@ -1,4 +1,5 @@
 import {
+  Activity,
   CheckCircle2,
   Eye,
   FileText,
@@ -9,6 +10,7 @@ import {
   Play,
   Send,
   RefreshCw,
+  ScrollText,
   SlidersHorizontal,
   Users,
   FolderKanban,
@@ -28,11 +30,13 @@ import { openingOf } from "./opening.js";
 import { DefinitionDialog, PreviewDialog, type LoopRef } from "./PreviewDialog.js";
 import { RolesPage } from "./pages/RolesPage.js";
 import { ProjectsPage } from "./pages/ProjectsPage.js";
+import { ExecutionsPage } from "./pages/ExecutionsPage.js";
+import { OutputsPage } from "./pages/OutputsPage.js";
 import { RunsPage } from "./pages/RunsPage.js";
 import type { ChatMessage, Focus, Names, ProjectUpdate, Reference } from "./types.js";
 import { Button, cx, LoopBadges } from "./ui.js";
 
-type Page = "projects" | "compose" | "roles" | "runs";
+type Page = "projects" | "compose" | "roles" | "runs" | "outputs" | "executions";
 const LANG_KEY = "contrejour-studio-lang";
 const CHAT_WIDTH_KEY = "contrejour-studio-chat-width";
 const CHAT_WIDTH = 380;
@@ -231,6 +235,18 @@ export function App() {
     begin();
     // Runs once, when the page opens.
   }, []);
+  /** An execution the owner picked on its page: the chat shows its conversation where it is. */
+  const openExecution = (open: AuthoringStatus) => {
+    setConversation(open.id);
+    pendingMessage.current = say({
+      from: "studio",
+      key: "session_resumed",
+      session: open.id,
+      status: open,
+    });
+    setStatus(open);
+    setPage("compose");
+  };
   /** Another project was opened, started or copied: everything on the page was the last one's. */
   const switched = (update?: ProjectUpdate) => {
     setFlow(null);
@@ -663,6 +679,8 @@ export function App() {
                 ["compose", "nav_compose", LayoutPanelLeft],
                 ["roles", "nav_roles", Users],
                 ["runs", "nav_runs", History],
+                ["outputs", "nav_outputs", ScrollText],
+                ["executions", "nav_executions", Activity],
               ] as const
             ).map(([key, label, Icon]) => (
               <button
@@ -929,6 +947,8 @@ export function App() {
               />
             )}
             {page === "runs" && <RunsPage overview={overview} />}
+            {page === "outputs" && <OutputsPage />}
+            {page === "executions" && <ExecutionsPage onOpen={openExecution} />}
           </div>
         )}
       </div>

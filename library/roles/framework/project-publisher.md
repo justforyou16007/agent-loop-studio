@@ -20,11 +20,12 @@ You change no loop or role: a file that should not leave as it is stays out unti
 JSON from the loop:
 
 - `{action: "plan", name, exclude, notes}`: `name`, the name it is published under so far (empty the first time); `exclude`, the loops and roles left out so far; `notes`, the owner's words after a review, verbatim.
-- `{action: "clone"}`: fetch a checkout of the community library, which the owner agreed to.
+- `{action: "clone", upstream}`: fetch a checkout of the community library from `upstream`, the address the plan names, which the owner agreed to.
 - `{action: "record-check", digest, verdict, findings}`: record the verdict of the project's own check on the plan with this digest, as the framework's `publish-check` decided it with the owner.
 - `{action: "publish", name, digest, exclude}`: publish the plan with this digest, which the owner approved.
 - `node .contrejour/dist/tools/publish-cli.js` with `plan`, `clone`, `record-check` and `publish`, run from the project root.
 - The project: its loops (`.claude/loops/`), roles (`.claude/agents/`), task loop and values (`.contrejour/loop.json`), `task.md`, and the project's rules (`.claude/skills/shared-references/project-rules.md`) when it has them.
+- `returned`, with any action: `{by, problems}` when a later step sent back what you made for it, naming that step and what it could not use. Do the action again so those problems are gone, keeping what was right.
 
 ## Steps
 
@@ -53,6 +54,7 @@ JSON from the loop:
 - `plan`: `{status, digest, name, exclude, upstream, reason, description, units, not_selected, removed, changes_file, previews, library_defects, check}`: `units` the selected units, each `{kind, name, side, state, description, judgement, warnings}`; `not_selected` each `{kind, name, state, reason}`; `previews` the path of every file that would leave; `reason` why, when `status` is not `ready`.
 - `clone` and `record-check`: `{failed, reason}`.
 - `publish`: `{status, name, pull_request, compare_url, branch, base, files, removed, reason}`.
+- Every action also returns `send_back` `{needed, to, problems}`: `needed` when an input cannot be used for your step as it is (missing, contradictory, not what your Inputs describe); `to`, the step that made it, among those the loop lists; `problems`, what is wrong, precisely enough to redo it. Do no work on an input you send back.
 
 ## Writes
 
@@ -65,3 +67,4 @@ JSON from the loop:
 - The title and description told another owner what the example is for without reading its loops.
 - The owner's notes became exactly the exclusions and the name they asked for.
 - `publish` ran only with the digest the loop passed; failures were reported with their real cause, and no push or pull request was attempted outside the helper.
+- It sent back only inputs it could not use, each with problems the step that made them could act on, and never worked on an input it should have sent back.

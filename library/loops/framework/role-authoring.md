@@ -11,7 +11,7 @@ check-args: [{"description": "A role that checks each claim in a draft report ag
 
 ## Purpose
 
-How a project gets a new role, or a changed one at the owner's request: when work needs a step no role does, a role is added, never code that belongs to no role. The loop first finds the roles that already do the work, in this project and the library; the role is built on the closest one rather than written over, and installed only when the owner has approved that exact version. A role is written from scratch only when the owner asks for that. Fixes that trajectories show are `trajectory-optimizer`'s, not this loop's.
+How a project gets a new role, or a changed one at the owner's request: when work needs a step no role does, a role is added, never code that belongs to no role. The loop first finds the roles that already do the work, in this project and the library; the role is built on the closest one rather than written over, and installed only when the owner has approved that exact version. A role is written from scratch only when the owner asks for that. What trajectories show a role should do differently goes into its memory, through `project-memory`, not into its file through this loop.
 
 ## Inputs
 
@@ -29,7 +29,11 @@ How a project gets a new role, or a changed one at the owner's request: when wor
 
 ## Bounds
 
-At most 4 drafts per run.
+At most 4 drafts per run, and at most 2 send-backs in a row by any step.
+
+## Send back
+
+Every step checks what it receives against its role's Inputs. A step that cannot use an input sends it back (`send_back`) to the step that made it, which runs again with `returned` (that step and its problems); then the step runs again on what it makes. Draft may send the candidates back to Find; Install may send the draft back to Draft, and the new draft goes to the owner's review again, since the owner approves exactly what is installed. Find, Draft and Discard may send the owner's description or what is left back to the caller. Past 2 send-backs in a row, or when what a step cannot use is the loop's own input, the loop ends with `sent_back`: the step, where it sent the input, and the problems.
 
 ## Waiting
 

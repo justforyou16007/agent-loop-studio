@@ -28,6 +28,10 @@ Some projects hold what must never leave them, and say so through their extensio
 
 One check per plan.
 
+## Send back
+
+Record checks what it receives against its role's Inputs: the digest and the files are the caller's, so what it cannot use goes back to the caller, and the loop ends with `sent_back` (the step and the problems) and the verdict `fail`. The owner's review sends nothing back: their `revise` is their own.
+
 ## Waiting
 
 Step 1 waits for the owner: the loop returns `{waiting: "owner", review_id, question, document}`, and the session runs it again with the reply in `answers`.

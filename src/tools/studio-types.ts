@@ -179,6 +179,15 @@ export interface AuthoringStatus {
   last_words: string;
   /** Why its last turn failed, or its session ended, in Claude Code's words. */
   failure: string | null;
+  /** Its latest loop run: each role it started, and whether the loop gave a result since. */
+  run: {
+    id: string;
+    started_at: string;
+    steps: { phase: string; role: string; done: boolean }[];
+    ended: boolean;
+  } | null;
+  /** Its latest run stopped partway, and the session waits: it can be resumed where it stopped. */
+  resumable: boolean;
 }
 /** A session the Studio runs, as it changes: sent to the page as it goes. */
 export interface LiveEvent {
@@ -321,3 +330,19 @@ export type ToolDetail =
     }
   | { kind: "content"; file: string; content: string; error: string }
   | { kind: "text"; input: string; output: string; error: string };
+
+/** What a role or a loop gave, as the output viewer shows it. */
+export interface OutputItem {
+  at: string;
+  kind: "role" | "loop";
+  name: string;
+  session: string;
+  run: string | null;
+  step: string;
+  output: unknown;
+}
+export interface OutputList {
+  items: OutputItem[];
+  roles: string[];
+  loops: string[];
+}

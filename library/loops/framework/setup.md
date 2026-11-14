@@ -27,7 +27,11 @@ Setting up a project's workflow: the loop the project runs as its work, and how.
 
 ## Bounds
 
-3 goal rounds, 6 task-loop rounds, 2 loops built or changed, 4 regenerated loops.
+3 goal rounds, 6 task-loop rounds, 2 loops built or changed, 4 regenerated loops; at most 2 send-backs in a row by any step.
+
+## Send back
+
+Every step checks what it receives against its role's Inputs. A step that cannot use an input sends it back (`send_back`) to the step that made it, which runs again with `returned` (that step and its problems); then the step runs again on what it makes. Finding the task loops may send the goal back to Goal; the proposal may send the candidates back to finding them, or the goal back to Goal; Use may send the proposal back, and the new proposal goes to the owner's review again, since the owner approves the task loop and its values; the hand-off may send the goal, the task loop recorded or the check back to the step that made them. A child loop that sends back what it was given has it made again and runs again: `loop-authoring` the description (proposed again), or the stale loop it was to regenerate (checked again). Goal and Check may send back only to the caller. When the goal must be restated and only the owner can say more, past 2 send-backs in a row, or when what a step cannot use is the loop's own input, the loop ends with `sent_back`: the step, where it sent the input, and the problems.
 
 ## Waiting
 

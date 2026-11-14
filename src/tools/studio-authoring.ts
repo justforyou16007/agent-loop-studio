@@ -17,6 +17,7 @@ import { entryRoleOf } from "./installation.js";
 import { collectDraftView } from "./loop-view.js";
 import {
   lastAssistantText,
+  latestRun,
   loopResults,
   ownerWait,
   runProgress,
@@ -343,9 +344,10 @@ export async function stopConversation(
 export async function conversationStatuses(
   projectRoot: string,
   host: SessionHost,
+  count = 5,
 ): Promise<ConversationStatus[]> {
   const root = path.resolve(projectRoot);
-  const conversations = readStore(root).slice(-5);
+  const conversations = readStore(root).slice(-count);
   const statuses: ConversationStatus[] = [];
   for (const conversation of conversations) {
     const live = host.get(conversation.id);
@@ -367,6 +369,12 @@ export async function conversationStatuses(
     // No session runs it any more: a message continues it from its transcript, if there is one.
     else state = transcript ? "stopped" : "gone";
     const review = state === "waiting" ? ownerWait(last) : null;
+    // Its latest loop run, and whether the loop gave a result since it started: one that did not, in a
+    // session no longer working, was stopped partway and can be resumed where it stopped.
+    const run = latestRun(transcript);
+    const ended =
+      run !== null && latest !== null && (Date.parse(latest.at) || 0) >= Date.parse(run.started_at);
+    const resumable = run !== null && !ended && (state === "stopped" || state === "idle");
     // A reply that did not reach the loop: what the session said about it.
     const replyFailed = state === "waiting" && pending;
     statuses.push({
@@ -384,7 +392,44 @@ export async function conversationStatuses(
       reply_failed: replyFailed,
       last_words: replyFailed ? lastAssistantText(entries) : "",
       failure: live?.failure ?? null,
+      run: run ? { id: run.id, started_at: run.started_at, steps: run.steps, ended } : null,
+      resumable,
     });
   }
   return statuses.reverse();
+}
+
+/**
+ * Resume a conversation's loop run where it stopped: the session runs the loop
+ * again with the run's id (`resumeFromRunId`), so the roles that finished give
+ * their results at once and the run goes on from where it was.
+ */
+export async function resumeConversation(
+  projectRoot: string,
+  host: SessionHost,
+  id: string,
+): Promise<{ id: string; run: string }> {
+  const root = path.resolve(projectRoot);
+  const conversations = readStore(root);
+  const conversation = conversations.find((entry) => entry.id === id);
+  if (!conversation) throw new Error(`no conversation ${id}`);
+  const status = (await conversationStatuses(root, host, conversations.length)).find(
+    (entry) => entry.id === id,
+  );
+  if (!status?.run || !status.resumable)
+    throw new Error("this conversation has no loop run that stopped partway");
+  // The Studio's words, as when it started the loop: the session resumes the run it names.
+  const message = `Resume the run ${status.run.id} of the ${conversation.loop} loop where it stopped, with the arguments it was started with.`;
+  if (!host.send(conversation.id, message, false))
+    await host.start({
+      key: conversation.id,
+      root,
+      agent: entryRoleOf(root),
+      message,
+      human: false,
+      resume: conversation.session.session_id,
+    });
+  conversation.sent.push({ text: message, at: new Date().toISOString() });
+  writeStore(root, conversations);
+  return { id, run: status.run.id };
 }

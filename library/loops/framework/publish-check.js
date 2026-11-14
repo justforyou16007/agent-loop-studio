@@ -27,6 +27,39 @@ const RECORDED = {
 
 const input = args || {};
 const answers = input.answers || {};
+// Send back (the definition's Send back section): a step that cannot use an input names the step that
+// made it (`send_back.to`); that step runs again with `returned`, then the step runs again on what it
+// makes. At most SEND_BACKS times in a row; past that, or for the loop's own input (`caller`), the loop
+// ends with `sent_back`.
+const SEND_BACKS = 2;
+const sending = (schema, to) => ({
+  ...schema,
+  properties: {
+    ...schema.properties,
+    send_back: {
+      type: "object",
+      properties: {
+        needed: { type: "boolean" },
+        to: { type: "string", enum: to },
+        problems: { type: "array", items: { type: "string" } },
+      },
+      required: ["needed", "to", "problems"],
+    },
+  },
+  required: [...schema.required, "send_back"],
+});
+const step = async (name, run, redo = {}) => {
+  for (let returns = 0; ; returns += 1) {
+    const out = await run();
+    const back = out && out.send_back;
+    if (!back || !back.needed) return out;
+    const again = redo[back.to];
+    if (!again || returns >= SEND_BACKS)
+      return { sent_back: { by: name, to: back.to, problems: back.problems } };
+    const remade = await again({ by: name, problems: back.problems });
+    if (remade && (remade.sent_back || remade.waiting)) return remade;
+  }
+};
 
 // Step 1
 phase("Check");
@@ -56,11 +89,17 @@ const findings =
 
 // Step 2
 phase("Record");
-const recorded = await agent(
-  JSON.stringify({ action: "record-check", digest: input.digest, verdict, findings }),
-  { agentType: "project-publisher", schema: RECORDED, phase: "Record" },
+const recorded = await step("project-publisher:record-check", () =>
+  agent(JSON.stringify({ action: "record-check", digest: input.digest, verdict, findings }), {
+    agentType: "project-publisher",
+    schema: sending(RECORDED, ["caller"]),
+    phase: "Record",
+  }),
 );
+// The digest and the files are the caller's: what Record cannot use goes back to it.
+if (recorded.sent_back)
+  return { verdict: "fail", findings: recorded.sent_back.problems, sent_back: recorded.sent_back };
 if (recorded.failed) return { verdict: "fail", findings: [recorded.reason] };
 return { verdict, findings };
 
-// contrejour-loop-definition-sha256: a10f748735af2928c42e3544b7583db5c3fade44d733143acda207f68ce932ac
+// contrejour-loop-definition-sha256: 7e1046986f2d051af502bcb775d010fddc0a4f527feba5b4fdf3b13c459b203b

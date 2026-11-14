@@ -19,6 +19,7 @@ JSON from the loop; `notes` carries the owner's words, verbatim:
 
 - `{action: "goal", goal, notes}`, `{action: "propose", goal, candidates, notes}`, `{action: "use", loop, params}`, `{action: "check"}` and `{action: "handoff", goal, loop, params, check}`. `candidates` are `loop-query`'s, best first, each `{loop, source, current, why}`.
 - This project: `task.md` when it has one, `.claude/loops/` and the library's loops (`library/loops/<side>/` in the checkouts recorded in `.contrejour/install.json`), `.contrejour/loop.json` (the task loop chosen now, if any).
+- `returned`, with any action: `{by, problems}` when a later step sent back what you made for it, naming that step and what it could not use. Do the action again so those problems are gone, keeping what was right.
 
 ## Steps
 
@@ -74,6 +75,7 @@ node .contrejour/dist/tools/project-cli.js finish-setup --project .
 - `use`: `{failed, reason, loop, params}`.
 - `check`: `{stale, defects}`.
 - `handoff`: `{report}`.
+- Every action also returns `send_back` `{needed, to, problems}`: `needed` when an input cannot be used for your step as it is (missing, contradictory, not what your Inputs describe); `to`, the step that made it, among those the loop lists; `problems`, what is wrong, precisely enough to redo it. Do no work on an input you send back.
 
 ## Writes
 
@@ -86,3 +88,4 @@ Through the helpers only: `.contrejour/loop.json` (`project-cli.js use`) and `.c
 - **Building**: a new loop was described only when the owner asked for one none of the candidates was.
 - **Hand-off**: the owner started the work from the report without asking how; every defect the checks found was named in it.
 - **Ownership**: `.contrejour/loop.json` and `.contrejour/setup.json` written only through the helpers; helper failures returned with their cause, not worked around.
+- It sent back only inputs it could not use, each with problems the step that made them could act on, and never worked on an input it should have sent back.

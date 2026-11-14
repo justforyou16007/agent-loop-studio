@@ -13,7 +13,7 @@ check-args: [{"description": "A loop where one implementer fixes the problems th
 
 How a project gets a new or changed loop. The owner describes what the loop should do, in their own words. The loop first finds what already exists and builds the new loop on the closest existing one rather than starting over; it adds the roles the loop needs, built on the closest existing roles too; it checks the whole; and it installs it only when the owner has approved that exact version, so the project's loops and roles stay untouched until then. A loop is written from scratch only when the owner asks for that.
 
-A new task loop is also offered the base components it lacks: the roles and loops that give a task loop a capability, such as memory (`project-memory`) and optimization (`trajectory-optimizer`), each saying in its frontmatter what it adds and where its step goes. The components the project has are found first; which of the new loop's loops (the task loop and the loops it runs as steps) should add which is then put to the owner; and the ones the owner confirms are added to the draft before its roles are drafted. The owner approves the whole draft afterwards, as for any loop.
+A new task loop is also offered the base components it lacks: the roles and loops that give a task loop a capability, such as memory and optimization (`project-memory`), each saying in its frontmatter what it adds and where its step goes. The components the project has are found first; which of the new loop's loops (the task loop and the loops it runs as steps) should add which is then put to the owner; and the ones the owner confirms are added to the draft before its roles are drafted. The owner approves the whole draft afterwards, as for any loop.
 
 It also regenerates the script of an installed loop whose definition is unchanged but whose script is stale or defective, without asking the owner: the owner already approved the definition, and the script is generated from it.
 
@@ -39,7 +39,11 @@ It also regenerates the script of an installed loop whose definition is unchange
 
 ## Bounds
 
-At most 4 drafts per run, and 4 new roles per draft; the base components are offered once per run.
+At most 4 drafts per run, and 4 new roles per draft; the base components are offered once per run; at most 2 send-backs in a row by any step.
+
+## Send back
+
+Every step checks what it receives against its role's Inputs. A step that cannot use an input sends it back (`send_back`) to the step that made it, which runs again with `returned` (that step and its problems); then the step runs again on what it makes. Draft may send the candidates back to Find; the components search, adding the components, a role's draft and Finish may send the draft back to Draft; adding the components may also send the recommendations back to the components search. Install may send the draft back to Draft, and the new draft goes to the owner's review again, since the owner approves exactly what is installed. Regenerate, Find, Draft and Discard may send the owner's words, or what is left to clean up, back to the caller. Past 2 send-backs in a row, or when what a step cannot use is the loop's own input, the loop ends with `sent_back` (the step, where it sent the input, and the problems), discarding its draft.
 
 ## Waiting
 

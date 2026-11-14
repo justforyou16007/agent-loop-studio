@@ -118,19 +118,22 @@ export interface StepProgress {
   done: boolean;
 }
 /**
- * Where the session's latest loop run is: each role it started, in order, with
+ * Where the session's latest loop run (or the run named) is: each role it started, in order, with
  * its phase and whether it has finished. Read from the journal Claude Code keeps
  * next to the transcript, so it reflects the run as it goes.
  */
-export function runProgress(transcript: string | null): StepProgress[] {
+export function runProgress(transcript: string | null, run?: string): StepProgress[] {
   if (!transcript) return [];
   const runs = path.join(transcript.replace(/\.jsonl$/, ""), "subagents", "workflows");
   if (!fs.existsSync(runs)) return [];
-  const latest = fs
-    .readdirSync(runs)
-    .map((name) => path.join(runs, name))
-    .filter((dir) => fs.existsSync(path.join(dir, "journal.jsonl")))
-    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
+  const latest = run
+    ? path.join(runs, run)
+    : fs
+        .readdirSync(runs)
+        .map((name) => path.join(runs, name))
+        .filter((dir) => fs.existsSync(path.join(dir, "journal.jsonl")))
+        .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
+  if (latest && !fs.existsSync(path.join(latest, "journal.jsonl"))) return [];
   if (!latest) return [];
   const steps: (StepProgress & { key: string })[] = [];
   for (const line of fs.readFileSync(path.join(latest, "journal.jsonl"), "utf8").split("\n")) {
@@ -163,4 +166,30 @@ export function runProgress(transcript: string | null): StepProgress[] {
     }
   }
   return steps.map(({ phase, role, done }) => ({ phase, role, done }));
+}
+
+export interface LatestRun {
+  /** The run's id, which a session resumes it by (`resumeFromRunId`). */
+  id: string;
+  /** When it started, ISO 8601. */
+  started_at: string;
+  steps: StepProgress[];
+}
+/** The session's latest loop run: its id, when it started, and each role it started. */
+export function latestRun(transcript: string | null): LatestRun | null {
+  if (!transcript) return null;
+  const runs = path.join(transcript.replace(/\.jsonl$/, ""), "subagents", "workflows");
+  if (!fs.existsSync(runs)) return null;
+  const latest = fs
+    .readdirSync(runs)
+    .map((name) => ({ name, dir: path.join(runs, name) }))
+    .filter((run) => fs.existsSync(path.join(run.dir, "journal.jsonl")))
+    .map((run) => ({ ...run, stat: fs.statSync(run.dir) }))
+    .sort((a, b) => b.stat.birthtimeMs - a.stat.birthtimeMs)[0];
+  if (!latest) return null;
+  return {
+    id: latest.name,
+    started_at: new Date(latest.stat.birthtimeMs || latest.stat.mtimeMs).toISOString(),
+    steps: runProgress(transcript, latest.name),
+  };
 }

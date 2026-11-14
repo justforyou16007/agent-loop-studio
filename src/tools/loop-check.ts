@@ -40,7 +40,9 @@ import {
   roleNames,
   rolesDir,
 } from "./loops.js";
-import { knownSides, triggersOf } from "./project-manifest.js";
+import { libraryRoots } from "./installation.js";
+import { insertMemory, readSeeds, slugOf, updateMemory } from "./memory.js";
+import { hasManifest, knownSides, readManifest, triggersOf } from "./project-manifest.js";
 
 /** Sections every role file has, so its work, its inputs and how it is judged are explicit. */
 export const ROLE_SECTIONS = ["Responsibility", "Inputs", "Output", "Writes", "Evaluation"];
@@ -182,8 +184,50 @@ interface RunOutput {
   phases: string[];
   runs: number;
 }
+/**
+ * A choice point the search treats apart: whether a step sends its input back
+ * (`send`), and the step it sends it to (`send-to`).
+ */
+type ChoiceTag = "send" | "send-to";
 /** Picks one of `options` alternatives at the next choice point of a run. */
-type Chooser = (options: number) => number;
+type Chooser = (options: number, tag?: ChoiceTag) => number;
+
+/**
+ * The field of a step's output by which it sends back an input it cannot use:
+ * `{needed, to, problems}`, `to` listing the steps (`<role>`, `<role>:<action>`,
+ * a child loop, or `caller`) it may send it to.
+ */
+export const SEND_BACK = "send_back";
+/** Steps that need no send-back: the owner's review, whose `revise` is the owner's own. */
+export const SEND_BACK_EXEMPT = new Set(["owner-review"]);
+const isSendBack = (schema: unknown): schema is { properties: Record<string, unknown> } => {
+  if (!schema || typeof schema !== "object") return false;
+  const properties = (schema as Record<string, unknown>).properties;
+  if (!properties || typeof properties !== "object") return false;
+  const needed = (properties as Record<string, unknown>).needed;
+  return Boolean(
+    needed && typeof needed === "object" && (needed as Record<string, unknown>).type === "boolean",
+  );
+};
+/** The steps a send-back schema lets a step send its input to. */
+const sendBackTargets = (schema: { properties: Record<string, unknown> }): unknown[] => {
+  const to = schema.properties.to;
+  return to && typeof to === "object" && Array.isArray((to as Record<string, unknown>).enum)
+    ? ((to as Record<string, unknown>).enum as unknown[])
+    : [];
+};
+/** A step's send-back under stubs: not needed, unless the search sends it, to one step it lists. */
+function sendBackStub(schema: { properties: Record<string, unknown> }, choose: Chooser): unknown {
+  const base = plain(schema) as Record<string, unknown>;
+  if (choose(2, "send") !== 1) return base;
+  const targets = sendBackTargets(schema);
+  return {
+    ...base,
+    needed: true,
+    to: targets.length ? targets[choose(targets.length, "send-to")] : "stub",
+    problems: ["the input cannot be used as it is"],
+  };
+}
 
 /** The answer a role gives when nothing is chosen: false, the first enum value, empty lists. */
 function plain(schema: unknown): unknown {
@@ -212,7 +256,8 @@ function plain(schema: unknown): unknown {
 /**
  * A stub answer that satisfies a role's output schema. Every boolean, enum and
  * list of it is a choice point: the chooser decides its value, so a search over
- * the choices reaches the script's branches.
+ * the choices reaches the script's branches. A step's send-back is a choice
+ * point of its own kind (`sendBackStub`).
  */
 function stub(schema: unknown, choose: Chooser, depth = 0): unknown {
   if (!schema || typeof schema !== "object" || depth > 5) return plain(schema);
@@ -223,7 +268,9 @@ function stub(schema: unknown, choose: Chooser, depth = 0): unknown {
       return Object.fromEntries(
         Object.entries((s.properties ?? {}) as Record<string, unknown>).map(([key, value]) => [
           key,
-          stub(value, choose, depth + 1),
+          depth === 0 && key === SEND_BACK && isSendBack(value)
+            ? sendBackStub(value, choose)
+            : stub(value, choose, depth + 1),
         ]),
       );
     case "array":
@@ -308,13 +355,18 @@ async function explore(input: RunInput): Promise<RunOutput> {
   let runs = 0;
   while (queue.length && runs < MAX_RUNS) {
     const flips = queue.shift()!;
-    const trace: number[] = [];
-    const choose: Chooser = (options) => {
+    const trace: { options: number; tag?: ChoiceTag }[] = [];
+    const choose: Chooser = (options, tag) => {
       const index = trace.length;
-      trace.push(options);
+      trace.push({ options, tag });
       return Math.min(flips.get(index) ?? 0, options - 1);
     };
     let calls = 0;
+    // The top loop's steps in order, each with what it sent back, to see what the loop does about it.
+    const sequence: { name: string; action: string; child: boolean; sent: string | null }[] = [];
+    // `<role>:<action>` names one of a role's steps; `<role>` (or a child loop) any of them.
+    const isStep = (step: (typeof sequence)[number], target: string): boolean =>
+      target.includes(":") ? `${step.name}:${step.action}` === target : step.name === target;
     // A child loop's phases are its own: only the top loop's are checked against its meta.
     const roleStub =
       (top: boolean) =>
@@ -322,17 +374,51 @@ async function explore(input: RunInput): Promise<RunOutput> {
         calls += 1;
         if (calls > MAX_ROLE_CALLS)
           throw new Error(`more than ${MAX_ROLE_CALLS} role calls: a loop has no working bound`);
-        if (typeof options.agentType !== "string" || !options.agentType)
+        const role = typeof options.agentType === "string" ? options.agentType : "";
+        if (!role)
           defects.push(
             `a step names no role: agent(${JSON.stringify(String(prompt).slice(0, 40))})`,
           );
         else {
-          reached.add(options.agentType);
-          if (!input.roles.includes(options.agentType))
-            defects.push(`unknown role "${options.agentType}"`);
+          reached.add(role);
+          if (!input.roles.includes(role)) defects.push(`unknown role "${role}"`);
         }
         if (top && typeof options.phase === "string") phases.add(options.phase);
-        return options.schema ? stub(options.schema, choose) : "stub";
+        // Every step may send back an input it cannot use, naming the steps it may send it to.
+        const schema = options.schema as Record<string, unknown> | undefined;
+        const back = (schema?.properties as Record<string, unknown> | undefined)?.[SEND_BACK];
+        if (top && role && !SEND_BACK_EXEMPT.has(role)) {
+          if (!isSendBack(back))
+            defects.push(
+              `step "${role}" can send nothing back: its schema needs ${SEND_BACK} {needed, to, problems}`,
+            );
+          else if (!sendBackTargets(back).length)
+            defects.push(
+              `step "${role}": ${SEND_BACK}.to must list the steps it may send its input back to`,
+            );
+        }
+        const value = options.schema ? stub(options.schema, choose) : "stub";
+        if (top) {
+          const sent = (value as Record<string, unknown> | null)?.[SEND_BACK] as
+            | Record<string, unknown>
+            | undefined;
+          // A role may do several of a loop's steps: its prompt's `action` tells them apart.
+          let action = "";
+          try {
+            const parsed: unknown = JSON.parse(String(prompt));
+            if (parsed && typeof parsed === "object")
+              action = String((parsed as Record<string, unknown>).action ?? "");
+          } catch {
+            // A prompt that is not JSON names no action.
+          }
+          sequence.push({
+            name: role,
+            action,
+            child: false,
+            sent: sent?.needed === true ? String(sent.to) : null,
+          });
+        }
+        return value;
       };
     const agent = roleStub(true);
     const parallel = (thunks: (() => Promise<unknown>)[]) =>
@@ -362,7 +448,7 @@ async function explore(input: RunInput): Promise<RunOutput> {
         defects.push(run);
         return null;
       }
-      return run(
+      const result = await run(
         roleStub(false),
         parallel,
         pipeline,
@@ -374,9 +460,21 @@ async function explore(input: RunInput): Promise<RunOutput> {
         DateStub,
         MathStub,
       );
+      // A child loop that sent back what it was given is a step that sent its input back.
+      const sent = (result as Record<string, unknown> | null)?.sent_back as
+        | Record<string, unknown>
+        | undefined;
+      sequence.push({
+        name,
+        action: "",
+        child: true,
+        sent: sent && typeof sent === "object" ? String(sent.to ?? "caller") : null,
+      });
+      return result;
     };
+    let result: unknown = null;
     try {
-      await script(
+      result = await script(
         agent,
         parallel,
         pipeline,
@@ -392,12 +490,55 @@ async function explore(input: RunInput): Promise<RunOutput> {
       defects.push(`run failed: ${(error as Error).message}`);
     }
     runs += 1;
-    // Each further run changes one more choice, after the last one this run changed.
-    if (flips.size < MAX_FLIPS) {
+    // What the loop did about a send-back. An input another step made is made again: that step runs
+    // again, and then the step that sent it back (a run tries one send-back, far from the bound). An
+    // input from the loop's caller cannot be made again here, so sending it back ends the loop with
+    // `sent_back`; a child loop that sent back what it was given is run again or ends the loop so.
+    const ended = Boolean(
+      result && typeof result === "object" && (result as Record<string, unknown>).sent_back,
+    );
+    sequence.forEach((call, index) => {
+      if (call.sent === null) return;
+      const later = sequence.slice(index + 1);
+      const self = call.action ? `${call.name}:${call.action}` : call.name;
+      if (call.child || call.sent === "caller") {
+        const again = call.child && later.some((step) => isStep(step, call.name));
+        if (!again && !ended)
+          defects.push(
+            call.child
+              ? `when the child loop ${call.name} sends back what it was given, the loop neither makes it again and runs ${call.name} again, nor ends with sent_back`
+              : `when ${self} sends back the loop's own input, the loop does not end with sent_back`,
+          );
+        return;
+      }
+      if (!sequence.slice(0, index).some((step) => isStep(step, call.sent!)))
+        defects.push(
+          `${self} may send its input back to ${call.sent}, which has not run before it`,
+        );
+      const remade = later.findIndex((step) => isStep(step, call.sent!));
+      const again = remade >= 0 && later.slice(remade + 1).some((step) => isStep(step, self));
+      if (!again)
+        defects.push(
+          `when ${self} sends its input back to ${call.sent}, the loop does not run ${call.sent} again and then ${self}`,
+        );
+    });
+    // Each further run changes one more choice, after the last one this run changed. A send-back is
+    // tried in the plain run and in runs that change one other answer, alone, then with each step it
+    // may go to: so the search grows with the number of steps, not with their combinations.
+    const sending = [...flips.keys()].find((index) => trace[index]?.tag === "send");
+    if (sending !== undefined) {
+      const next = trace[sending + 1];
+      if (next?.tag === "send-to" && !flips.has(sending + 1))
+        for (let option = 1; option < next.options; option += 1)
+          queue.push(new Map([...flips, [sending + 1, option]]));
+    } else if (flips.size < MAX_FLIPS) {
       const after = flips.size ? Math.max(...flips.keys()) + 1 : 0;
-      for (let index = after; index < trace.length; index += 1)
-        for (let option = 1; option < trace[index]!; option += 1)
+      for (let index = after; index < trace.length; index += 1) {
+        const { options, tag } = trace[index]!;
+        if (tag === "send-to" || (tag === "send" && flips.size > 1)) continue;
+        for (let option = 1; option < options; option += 1)
           queue.push(new Map([...flips, [index, option]]));
+      }
     }
   }
   return { defects: [...new Set(defects)], reached: [...reached], phases: [...phases], runs };
@@ -456,6 +597,11 @@ export async function checkLoop(root: string, name: string): Promise<LoopReport>
   const fields = frontmatter(definition.toString("utf8"));
   if (fields.kind !== undefined && !(LOOP_KINDS as readonly string[]).includes(fields.kind))
     defects.push(`kind must be one of ${LOOP_KINDS.join(", ")}`);
+  // The definition is the authority on what the loop does with a send-back, so it says so.
+  if (!/^##\s+Send back\b/m.test(definition.toString("utf8")))
+    defects.push(
+      "the definition has no Send back section: what each step may send back, to which step, and the bound",
+    );
   const triggers = triggersOf(root);
   for (const action of parseTriggers(fields.triggers))
     if (!triggers[action])
@@ -525,7 +671,7 @@ export async function checkLoop(root: string, name: string): Promise<LoopReport>
   // the loop it is given says which argument gives it (`child-loop-arg`), and the check runs the one
   // its check-args name.
   const loopNames = listLoops(root);
-  if (/\bworkflow\s*\(\s*(?!['"`])/.test(body) && !childLoopArg)
+  if (/\bworkflow\s*\(\s*[^\s'"`]/.test(body) && !childLoopArg)
     defects.push("a child loop must be named by a string");
   for (const match of body.matchAll(/\bworkflow\s*\(\s*(['"`])([^'"`]+)\1/g))
     if (!loopNames.includes(match[2]!)) defects.push(`unknown loop "${match[2]}"`);
@@ -601,9 +747,28 @@ export const sidesKnown = (root: string): string[] => knownSides(root);
 /** Every role file names itself after its file, describes itself, says who it serves and has the required sections. */
 /** The reasoning efforts a role may ask for that every model provider Claude Code reaches accepts. */
 const ROLE_EFFORTS = ["low", "high", "xhigh", "max"];
+/** The text of a Markdown section, `## <title>` up to the next `## `; null when there is none. */
+export function sectionOf(text: string, title: string): string | null {
+  const lines = text.split(/\r?\n/);
+  const start = lines.findIndex((line) => new RegExp(`^##\\s+${title}\\b`, "i").test(line));
+  if (start < 0) return null;
+  const end = lines.findIndex((line, index) => index > start && /^##\s/.test(line));
+  return lines.slice(start + 1, end < 0 ? lines.length : end).join("\n");
+}
+/** The roles sessions enter as: they run loops and are never a loop's step. */
+function entryRoles(root: string): string[] {
+  try {
+    return hasManifest(root)
+      ? Object.values(readManifest(root).profiles).map((profile) => profile.entry_role)
+      : [];
+  } catch {
+    return [];
+  }
+}
 export function checkRoles(root: string, only?: string[]): RoleReport[] {
   const dir = rolesDir(root);
   if (!fs.existsSync(dir)) return [];
+  const exempt = new Set([...SEND_BACK_EXEMPT, ...entryRoles(root)]);
   return fs
     .readdirSync(dir)
     .filter((file) => file.endsWith(".md") && (!only?.length || only.includes(file.slice(0, -3))))
@@ -626,13 +791,66 @@ export function checkRoles(root: string, only?: string[]): RoleReport[] {
       for (const section of ROLE_SECTIONS)
         if (!new RegExp(`^##\\s+${section}\\b`, "mi").test(text))
           defects.push(`missing section "## ${section}"`);
-      return { role: file.slice(0, -3), ok: !defects.length, defects };
+      // Every step checks what it receives: it may send an input back, and redoes its work when one comes back.
+      // The fields are named as fields, in code spans, so a word of the prose never counts as one.
+      const names = (section: string) =>
+        [...(sectionOf(text, section) ?? "").matchAll(/`([^`]*)`/g)].map((span) => span[1]!);
+      if (!exempt.has(file.slice(0, -3))) {
+        if (!names("Inputs").some((span) => /\breturned\b/.test(span)))
+          defects.push(
+            "its Inputs do not say what it does with `returned`, a later step's send-back of its output",
+          );
+        if (!names("Output").some((span) => new RegExp(`\\b${SEND_BACK}\\b`).test(span)))
+          defects.push(
+            `its Output has no \`${SEND_BACK}\`: every step may send back an input it cannot use`,
+          );
+      }
+      // A role with memory on queries it first, for the kind of task it was given.
+      const role = file.slice(0, -3);
+      if (fields.memory !== undefined && !["on", "off"].includes(fields.memory))
+        defects.push("frontmatter memory must be on or off");
+      if (
+        fields.memory === "on" &&
+        !new RegExp(`memory\\.js query[^\\n]*--role ${role}\\b`).test(text)
+      )
+        defects.push(
+          `its memory is on, but its steps do not query it first: \`node .contrejour/dist/tools/memory.js query --project . --role ${role} --task "<the kind of task>"\``,
+        );
+      return { role, ok: !defects.length, defects };
     });
+}
+
+/** A new role holds a brief process: its knowledge goes to its memory. */
+export const ROLE_BRIEF = { lines: 40, chars: 4000 };
+const BRIEF_SECTIONS = new Set([...ROLE_SECTIONS, "Steps"]);
+/** Why a role's text is more than a brief process, when it is. */
+function briefProblems(text: string): string[] {
+  const body = text.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "");
+  const lines = body.split(/\r?\n/).filter((line) => line.trim()).length;
+  const problems: string[] = [];
+  if (lines > ROLE_BRIEF.lines || body.length > ROLE_BRIEF.chars)
+    problems.push(
+      `a new role holds a brief process (at most ${ROLE_BRIEF.lines} lines and ${ROLE_BRIEF.chars} characters), and this one has ${lines} lines and ${body.length} characters: what it knows goes to its memory, as entries in the draft's memory/<role>.jsonl`,
+    );
+  for (const match of body.matchAll(/^##\s+(.+?)\s*$/gm))
+    if (!BRIEF_SECTIONS.has(match[1]!))
+      problems.push(
+        `a new role has only the sections ${[...BRIEF_SECTIONS].join(", ")}: "${match[1]}" is knowledge, which goes to its memory`,
+      );
+  return problems;
 }
 
 const DRAFT_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 /** Where a draft keeps its files, as .claude/ would hold them. */
-const DRAFT_LAYOUT: Record<string, string> = { agents: ".md", loops: ".md", workflows: ".js" };
+const DRAFT_LAYOUT: Record<string, string> = {
+  agents: ".md",
+  loops: ".md",
+  workflows: ".js",
+  // A role's first memory entries, one JSON object per line, written into its memory on install.
+  memory: ".jsonl",
+};
+/** What of a draft goes into .claude/; its memory entries go to the roles' memories. */
+const CLAUDE_PARTS = ["agents", "loops", "workflows"];
 export const draftsDir = (root: string): string =>
   path.join(path.resolve(root), ".contrejour", "drafts");
 export function draftDir(root: string, id: string): string {
@@ -680,7 +898,7 @@ async function withDraft<T>(
   if (!fs.existsSync(dir)) failA1("NO_DRAFT", `there is no draft ${id}`);
   const merged = fs.mkdtempSync(path.join(os.tmpdir(), "contrejour-draft-"));
   try {
-    for (const sub of Object.keys(DRAFT_LAYOUT)) {
+    for (const sub of CLAUDE_PARTS) {
       const target = path.join(merged, ".claude", sub);
       fs.mkdirSync(target, { recursive: true });
       for (const from of [path.join(path.resolve(root), ".claude", sub), path.join(dir, sub)])
@@ -716,6 +934,47 @@ export async function checkDraft(root: string, id: string): Promise<DraftReport>
     for (const name of draftNames(root, id, "loops")) loops.push(await checkLoop(merged, name));
     const names = draftNames(root, id, "agents");
     const roles = names.length ? checkRoles(merged, names) : [];
+    const reportOf = (role: string): RoleReport => {
+      let report = roles.find((entry) => entry.role === role);
+      if (!report) roles.push((report = { role, ok: true, defects: [] }));
+      return report;
+    };
+    // A new role holds a brief process, unless it is a library role brought in as it is.
+    for (const name of names) {
+      if (fs.existsSync(path.join(rolesDir(root), `${name}.md`))) continue;
+      const drafted = normalText(path.join(draftDir(root, id), "agents", `${name}.md`));
+      const library = libraryRoots(root).map((base) => path.join(base, "library", "roles"));
+      const asInLibrary = library.some(
+        (dir) =>
+          fs.existsSync(dir) &&
+          fs
+            .readdirSync(dir)
+            .some(
+              (side) =>
+                fs.existsSync(path.join(dir, side, `${name}.md`)) &&
+                normalText(path.join(dir, side, `${name}.md`)) === drafted,
+            ),
+      );
+      if (!asInLibrary) reportOf(name).defects.push(...briefProblems(drafted));
+    }
+    // A role's first memory entries: valid, without keys, for a role whose memory is on.
+    for (const seeds of files.filter((file) => file.startsWith("memory/"))) {
+      const role = seeds.slice("memory/".length, -".jsonl".length);
+      const report = reportOf(role);
+      const roleFile = path.join(merged, ".claude", "agents", `${role}.md`);
+      if (!fs.existsSync(roleFile))
+        report.defects.push(`${seeds} is memory for ${role}, which does not exist`);
+      else if (frontmatter(fs.readFileSync(roleFile, "utf8")).memory !== "on")
+        report.defects.push(
+          `${seeds} holds memory for ${role}, whose memory is off: turn it on (\`memory: on\`)`,
+        );
+      try {
+        readSeeds(path.join(draftDir(root, id), seeds));
+      } catch (error) {
+        report.defects.push(`${seeds}: ${(error as Error).message}`);
+      }
+    }
+    for (const report of roles) report.ok = !report.defects.length;
     // A script without its definition, here or in the project, is reported by the loop's check.
     const scripts = files.filter((file) => file.startsWith("workflows/"));
     for (const script of scripts) {
@@ -754,13 +1013,31 @@ export async function installDraft(
         .join("; ") || "the draft is empty",
     );
   const dir = draftDir(root, id);
+  const installed: string[] = [];
   for (const file of report.files) {
+    if (file.startsWith("memory/")) {
+      // A role's first entries go into its memory: one it already has is brought up to the draft's.
+      const role = file.slice("memory/".length, -".jsonl".length);
+      for (const seed of readSeeds(path.join(dir, file))) {
+        const id = seed.id ?? slugOf(String(seed.title ?? ""));
+        try {
+          insertMemory(root, role, { ...seed, id });
+        } catch (error) {
+          if ((error as { code?: string }).code !== "ALREADY_EXISTS") throw error;
+          const { id: _id, ...fields } = seed;
+          updateMemory(root, role, id, fields);
+        }
+        installed.push(`memory/${role}/pages/${id}.md`);
+      }
+      continue;
+    }
     const target = path.join(path.resolve(root), ".claude", ...file.split("/"));
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.copyFileSync(path.join(dir, file), target);
+    installed.push(`.claude/${file}`);
   }
   fs.rmSync(dir, { recursive: true, force: true });
-  return { draft: id, installed: report.files.map((file) => `.claude/${file}`) };
+  return { draft: id, installed };
 }
 export function discardDraft(root: string, id: string): { draft: string; discarded: boolean } {
   const dir = draftDir(root, id);
