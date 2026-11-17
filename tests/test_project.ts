@@ -13,6 +13,8 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isStatusCommand } from "../studio/src/chat/commands.js";
+import { memoryByRole, plannedTicks, selectionChange } from "../studio/src/publish-review.js";
 import { openingOf } from "../studio/src/opening.js";
 
 const source = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -72,8 +74,11 @@ try {
   assert.equal(read(path.join(plain, ".contrejour/project.json")).name, "agent-loop-studio");
   for (const role of ["task-manager", "project-memory", "owner-review", "loop-editor", "role-creator"])
     assert.ok(fs.existsSync(path.join(plain, ".claude/agents", `${role}.md`)), role);
-  for (const loop of ["setup", "loop-trial", "loop-authoring", "role-authoring", "publish", "publish-check", "experiment-queue"])
+  for (const loop of ["setup", "loop-trial", "loop-authoring", "role-authoring", "publish", "publish-check", "experiment-queue"]) {
     assert.ok(fs.existsSync(path.join(plain, ".claude/loops", `${loop}.md`)), loop);
+    // Written in English, the language it runs in, and shown in Chinese from the translation beside it.
+    assert.ok(fs.existsSync(path.join(plain, ".claude/loops", `${loop}.zh.json`)), `${loop}'s translation`);
+  }
   for (const role of ["project-setup", "loop-tester", "project-publisher", "watchdog", "experiment-runner"]) assert.ok(fs.existsSync(path.join(plain, ".claude/agents", `${role}.md`)), role);
   assert.ok(read(path.join(plain, ".claude/settings.json")).hooks.PreToolUse, "the hooks guard every loop from the start");
   assert.equal(read(path.join(plain, ".claude/settings.json")).agent, "task-manager", "every session runs as the entry role from the start");
@@ -100,6 +105,11 @@ try {
   fs.writeFileSync(path.join(probe, "loops/component-probe.md"), "---\nname: component-probe\ncomponent: probing — a step that probes\n---\n");
   assert.deepEqual(components("--draft", "component-probe").sort(), [...components(), "loop:component-probe:probing"].sort());
   fs.rmSync(path.join(plain, ".contrejour/drafts"), { recursive: true });
+  // Only the owner changes a loop: a trial writes what the roles learned into their memory, and ends with a change to
+  // the loop's own steps as a suggestion, never making it.
+  const trialScript = fs.readFileSync(path.join(plain, ".claude/workflows/loop-trial.js"), "utf8");
+  assert.doesNotMatch(trialScript, /workflow\("loop-authoring", \{ description/);
+  assert.match(trialScript, /suggested_change: fix\.loop_change/);
   // Every step may send back an input it cannot use: the check sends each one back to each step it may go to, and a
   // loop that does nothing about it fails, as does a step that cannot send back and a role that says nothing of it.
   const loopCheck = (...args: string[]) => spawnSync(process.execPath, [path.join(plain, ".contrejour/dist/tools/loop-check.js"), ...args, "--project", plain], { encoding: "utf8" });
@@ -184,6 +194,23 @@ try {
   assert.deepEqual((JSON.parse(memory("query", "--role", "scout", "--task", "probing").stdout).entries as { title: string }[]).map((entry) => entry.title), ["Look twice"]);
   fs.rmSync(path.join(plain, ".claude/agents/scout.md"));
   fs.rmSync(path.join(plain, "memory"), { recursive: true });
+  // A loop runs in English and is shown in the owner's language: a drafted loop has a translation of every string the
+  // Studio shows of it, which the owner approves and the project installs with it.
+  const zhDraft = path.join(plain, ".contrejour/drafts/publish-check");
+  for (const [from, to] of [["loops/publish-check.md", "loops/publish-check.md"], ["workflows/publish-check.js", "workflows/publish-check.js"]]) {
+    fs.mkdirSync(path.dirname(path.join(zhDraft, to)), { recursive: true });
+    fs.copyFileSync(path.join(plain, ".claude", from), path.join(zhDraft, to));
+  }
+  const untranslated = JSON.parse(loopCheck("draft", "--draft", "publish-check").stdout);
+  assert.equal(untranslated.ok, false);
+  assert.match(untranslated.loops[0].defects.join("\n"), /publish-check\.zh\.json lacks 16 of the strings the Studio shows of it/);
+  const toTranslate = JSON.parse(loopCheck("strings", "--draft", "publish-check", "publish-check").stdout);
+  assert.deepEqual([toTranslate.file, toTranslate.missing.length, toTranslate.strings[2]], [".contrejour/drafts/publish-check/loops/publish-check.zh.json", 16, "Check"]);
+  fs.copyFileSync(path.join(plain, ".claude/loops/publish-check.zh.json"), path.join(zhDraft, "loops/publish-check.zh.json"));
+  const translated = JSON.parse(loopCheck("draft", "--draft", "publish-check").stdout);
+  assert.ok(translated.ok, JSON.stringify(translated.loops));
+  assert.ok(translated.files.includes("loops/publish-check.zh.json"), "the owner approves the translation with the loop");
+  fs.rmSync(path.join(plain, ".contrejour/drafts"), { recursive: true });
   // The experiments a queue dispatches run detached, as many at once as allowed; the watchdog's wait returns when
   // one ends, and a stopped one stops with what it started.
   const tool = (name: string, ...args: string[]) => spawnSync(process.execPath, [path.join(plain, `.contrejour/dist/tools/${name}.js`), ...args, "--project", plain], { encoding: "utf8" });
@@ -369,6 +396,25 @@ try {
     );
     assert.deepEqual(flow.params.map((param: { name: string; links: string[] }) => [param.name, param.value]), [["max_rounds", 3]]);
     assert.ok(flow.nodes.find((node: { title: string }) => node.title === "Review").waits);
+    // The page asks for a loop's strings in its language: names stay as they are, a string the translation lacks stays English.
+    const zhFlow = JSON.parse((await request(at("api/flow?name=iterate-and-check&source=project&lang=zh"), { cookie })).body);
+    assert.deepEqual(zhFlow.nodes.filter((node: { kind: string }) => node.kind === "step").map((node: { title: string }) => node.title), ["计划", "构建", "检查", "记录", "审核"]);
+    assert.deepEqual([zhFlow.loop.name, zhFlow.params[0].name], ["iterate-and-check", "max_rounds"]);
+    // Each says the language it was asked in, so the page asks again when it shows another.
+    assert.deepEqual([flow.lang, zhFlow.lang], ["en", "zh"]);
+    assert.match(zhFlow.params[0].description, /最多做几轮/);
+    const zhOverview = JSON.parse((await request(at("api/overview?lang=zh"), { cookie })).body);
+    assert.match(named(zhOverview.loops, "setup").description, /^设置这个项目的 workflow/);
+    assert.deepEqual([overview.lang, zhOverview.lang], ["en", "zh"]);
+    assert.equal(named(JSON.parse((await request(at("api/overview?lang=fr"), { cookie })).body).loops, "setup").description, named(overview.loops, "setup").description);
+    const translation = path.join(first, ".claude/loops/iterate-and-check.zh.json");
+    const fullTranslation = fs.readFileSync(translation, "utf8");
+    const partial = JSON.parse(fullTranslation);
+    delete partial.strings.Build;
+    fs.writeFileSync(translation, JSON.stringify(partial));
+    const partly = JSON.parse((await request(at("api/flow?name=iterate-and-check&source=project&lang=zh"), { cookie })).body);
+    assert.deepEqual(partly.nodes.filter((node: { kind: string }) => node.kind === "step").map((node: { title: string }) => node.title).slice(0, 2), ["计划", "Build"]);
+    fs.writeFileSync(translation, fullTranslation);
 
     // A copy carries the work, never the keys or what runs left behind; its hooks are its own.
     fs.mkdirSync(path.join(first, "memory"), { recursive: true });
@@ -547,6 +593,19 @@ try {
     fs.writeFileSync(transcriptFile, notification(later(1), { waiting: "owner", review_id: "r1", question: "Is this right?", document: "The note." }));
     let waiting = await statusOf(id);
     assert.deepEqual([waiting.state, waiting.review.review_id, waiting.review.question, waiting.note, waiting.reply_failed], ["waiting", "r1", "Is this right?", "The note.", false]);
+    // A loop's draft under review is shown in the page's language, from the translation the draft carries, and says which.
+    const reviewDraft = path.join(first, ".contrejour/drafts/iterate-and-check/loops");
+    fs.mkdirSync(reviewDraft, { recursive: true });
+    for (const name of ["iterate-and-check.md", "iterate-and-check.zh.json"]) fs.copyFileSync(path.join(first, ".claude/loops", name), path.join(reviewDraft, name));
+    // The transcript grows as Claude Code writes it: a new result is appended, never written over the old.
+    fs.appendFileSync(transcriptFile, notification(later(1), { waiting: "owner", review_id: "loop:iterate-and-check:abc", question: "Install this draft?", document: "" }));
+    const draftIn = async (lang: string) => JSON.parse((await request(at(`api/authoring?lang=${lang}`), { cookie })).body).conversations.find((entry: { id: string }) => entry.id === id).draft.flow;
+    const firstStep = (shown: { nodes: { kind: string; title: string }[] }) => shown.nodes.find((node) => node.kind === "step")!.title;
+    const zhDraftFlow = await draftIn("zh");
+    assert.deepEqual([zhDraftFlow.lang, firstStep(zhDraftFlow)], ["zh", "计划"]);
+    const enDraftFlow = await draftIn("en");
+    assert.deepEqual([enDraftFlow.lang, firstStep(enDraftFlow)], ["en", "Plan"]);
+    fs.rmSync(path.join(first, ".contrejour/drafts"), { recursive: true });
     fs.appendFileSync(transcriptFile, notification(later(-1), { waiting: "owner", review_id: "r1", question: "Is this right?", document: "The note." }));
     fs.appendFileSync(transcriptFile, JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "It did not reach the loop." }] } }) + "\n");
     waiting = await statusOf(id);
@@ -679,6 +738,32 @@ try {
     fs.mkdirSync(plainRun, { recursive: true });
     fs.writeFileSync(path.join(plainRun, "journal.jsonl"), `${JSON.stringify({ type: "started", key: "k1", agentId: "b1", label: "goal", phase: "Goal" })}\n`);
     fs.writeFileSync(path.join(plainRun, "agent-b1.meta.json"), JSON.stringify({ agentType: "project-setup" }));
+    // The chat asks the Studio how the loops stand, never a session, when the owner types the command alone.
+    assert.deepEqual(["/status", " /STATUS ", "/状态", "/运行状态", "status", "/status please", "把状态检查去掉"].map(isStatusCommand), [true, true, true, true, false, false, false]);
+    // Publishing is reviewed on a page of its own: the plan the publish loop's review is about, every memory entry
+    // ticked as it leaves; what the owner unticks is left out, what they tick again goes back.
+    assert.deepEqual(JSON.parse((await request(at("api/publish/plan"), { cookie })).body), { plan: null });
+    const entryUnit = (name: string, state: string) => {
+      const [role, id] = name.split("/") as [string, string];
+      return { kind: "memory" as const, name, side: null, description: id, state, warnings: [], memory: { role, id, kind: "lesson", title: id, tasks: [], body: "", evidence: [] } };
+    };
+    const reviewed = {
+      name: "first",
+      digest: "abc",
+      selected: [entryUnit("planner/b", "new"), entryUnit("planner/a", "changed"), { kind: "loop" as const, name: "x", side: "framework", description: "", state: "new", warnings: [] }],
+      not_selected: [entryUnit("builder/c", "excluded"), entryUnit("builder/d", "blocked")],
+      removed: [],
+      library_check: null,
+      check: "not-needed",
+    };
+    fs.mkdirSync(path.join(first, ".contrejour/publish"), { recursive: true });
+    fs.writeFileSync(path.join(first, ".contrejour/publish/plan.json"), JSON.stringify(reviewed));
+    assert.equal(JSON.parse((await request(at("api/publish/plan"), { cookie })).body).plan.digest, "abc");
+    fs.rmSync(path.join(first, ".contrejour/publish/plan.json"));
+    assert.deepEqual(memoryByRole(reviewed).map((group) => [group.role, group.units.map((unit) => unit.name)]), [["builder", ["builder/c", "builder/d"]], ["planner", ["planner/a", "planner/b"]]]);
+    assert.deepEqual([...plannedTicks(reviewed)].sort(), ["planner/a", "planner/b"]);
+    assert.deepEqual(selectionChange(reviewed, plannedTicks(reviewed)), { leaveOut: [], putBack: [] }, "nothing changed: the page approves");
+    assert.deepEqual(selectionChange(reviewed, new Set(["planner/a", "builder/c", "builder/d"])), { leaveOut: ["planner/b"], putBack: ["builder/c"] }, "a blocked entry is not the owner's to tick");
     const executions = async () => JSON.parse((await request(at("api/executions"), { cookie })).body).executions as { id: string; state: string; resumable: boolean; run: { id: string; steps: unknown[]; ended: boolean } | null }[];
     const listed = await executions();
     const c8 = listed.find((entry) => entry.id === "c8")!;
@@ -767,8 +852,8 @@ try {
   const community = path.join(checkout, "agent-loop-community");
   git(sandbox, "clone", "--quiet", remote, community);
   const { applyExample, applyReference, listReferences } = (await import(pathToFileURL(path.join(source, "dist/tools/workspace.js")).href)) as {
-    applyExample(root: string, dir: string, source: string): { added: string[]; loop: string };
-    applyReference(root: string, name: string): { added: string[]; loop: string };
+    applyExample(root: string, dir: string, source: string): { added: string[]; loop: string; memory: string[] };
+    applyReference(root: string, name: string): { added: string[]; loop: string; memory: string[] };
     listReferences(library: string): { name: string; source: string; task_loop: string; params?: Record<string, unknown> }[];
   };
   // A project started from the framework's example, its task run once, one base role improved.
@@ -778,6 +863,11 @@ try {
   fs.mkdirSync(path.join(maker, ".contrejour/trajectories"), { recursive: true });
   fs.writeFileSync(path.join(maker, ".contrejour/trajectories/index.jsonl"), `${JSON.stringify({ agent_type: "planner", workflows: [{ id: "wf_9", name: "iterate-and-check" }] })}\n`);
   fs.appendFileSync(path.join(maker, ".claude/agents/owner-review.md"), "\nA project's improvement to a base role.\n");
+  // What its roles learned leaves with it, entry by entry as the owner chooses.
+  const makerMemory = (...args: string[]) => spawnSync(process.execPath, [path.join(maker, ".contrejour/dist/tools/memory.js"), ...args, "--project", maker], { encoding: "utf8" });
+  assert.equal(makerMemory("insert", "--role", "planner", "--kind", "lesson", "--title", "One module a round", "--body", "Rounds that changed several modules failed their check.", "--tasks", "plan a round", "--evidence", "run 1").status, 0);
+  assert.equal(makerMemory("insert", "--role", "builder", "--kind", "fact", "--title", "Build before deploying", "--body", "Run the build before a deploy.", "--tasks", "deploy").status, 0);
+  const leftOut = ["--exclude", "builder/build-before-deploying"];
   // What the project is: written by project-publisher in the publish loop.
   assert.match(plan(maker).metadata.problem, /reference\.json/);
   fs.mkdirSync(path.join(maker, ".contrejour/publish"), { recursive: true });
@@ -791,21 +881,34 @@ try {
   // The whole project: what it got from its example and its version of a base role; the base roles it left as they were stay out.
   assert.deepEqual(
     published.selected.map((unit: { kind: string; name: string }) => `${unit.kind}:${unit.name}`).sort(),
-    ["loop:iterate-and-check", "project:maker", "role:builder", "role:checker", "role:owner-review", "role:planner"],
+    ["loop:iterate-and-check", "memory:builder/build-before-deploying", "memory:planner/one-module-a-round", "project:maker", "role:builder", "role:checker", "role:owner-review", "role:planner"],
   );
+  // Each memory entry is a unit of its own, as the owner reviews it; the plan is kept where the Studio's review page reads it.
+  const lesson = published.selected.find((unit: { name: string }) => unit.name === "planner/one-module-a-round");
+  assert.deepEqual([lesson.kind, lesson.memory.title, lesson.files[0].target], ["memory", "One module a round", "projects/maker/memory/planner/one-module-a-round.json"]);
+  assert.equal(read(path.join(maker, ".contrejour/publish/plan.json")).digest, published.digest);
+  // A loop leaves with its translation.
+  assert.ok(published.selected.find((unit: { name: string }) => unit.name === "iterate-and-check").files.some((entry: { target: string }) => entry.target === "projects/maker/loops/iterate-and-check.zh.json"));
   assert.ok(published.not_selected.every((unit: { state: string }) => unit.state !== "unchanged"));
   assert.ok(published.unchanged >= 8, "the framework's base loops and roles, as installed, are not copied");
   assert.equal(published.library_check.ok, true, JSON.stringify(published.library_check));
   assert.equal(published.selected.find((unit: { kind: string }) => unit.kind === "project").files[0].target, "projects/maker/reference.json");
+  // An entry the owner leaves out stays here.
+  published = plan(maker, ...leftOut);
+  assert.equal(published.not_selected.find((unit: { name: string }) => unit.name === "builder/build-before-deploying").state, "excluded");
+  assert.equal(read(path.join(maker, ".contrejour/publish/plan.json")).digest, published.digest);
   // Exactly the approved plan leaves.
-  assert.equal(JSON.parse(cli(maker, "publish", "--digest", "0".repeat(64)).stderr).reason, "PLAN_CHANGED");
-  let sent = cli(maker, "publish", "--digest", published.digest);
+  assert.equal(JSON.parse(cli(maker, "publish", "--digest", "0".repeat(64), ...leftOut).stderr).reason, "PLAN_CHANGED");
+  let sent = cli(maker, "publish", "--digest", published.digest, ...leftOut);
   assert.equal(sent.status, 0, sent.stdout + sent.stderr);
   let result = JSON.parse(sent.stdout);
   assert.equal(result.status, "pushed");
   assert.match(result.branch, /^publish\/maker-\d{8}$/);
   assert.equal(git(remote, "show", `${result.branch}:projects/maker/reference.json`).includes('"task_loop": "iterate-and-check"'), true);
   assert.match(git(remote, "show", `${result.branch}:projects/maker/roles/owner-review.md`), /A project's improvement to a base role/);
+  assert.match(git(remote, "show", `${result.branch}:projects/maker/memory/planner/one-module-a-round.json`), /Rounds that changed several modules failed their check/);
+  assert.throws(() => git(remote, "show", `${result.branch}:projects/maker/memory/builder/build-before-deploying.json`), "the entry left out did not leave");
+  assert.match(git(remote, "show", `${result.branch}:projects/maker/loops/iterate-and-check.zh.json`), /"lang": "zh"/);
   assert.equal(read(path.join(maker, ".contrejour/published.json")).name, "maker");
   // The maintainers merge it; another machine's Studio then starts a project from it.
   git(maintainer, "fetch", "--quiet", "origin");
@@ -816,7 +919,11 @@ try {
   assert.deepEqual([example?.source, example?.task_loop], ["community", "iterate-and-check"]);
   const follower = path.join(workspace, "follower");
   execFileSync(process.execPath, [installer, "--role", "default", "--project", follower, "--library", checkout], { stdio: "ignore" });
-  applyReference(follower, "maker");
+  assert.deepEqual(applyReference(follower, "maker").memory, ["planner/one-module-a-round"]);
+  // What the planner learned is the follower's planner's now, saying where it came from.
+  const learned = JSON.parse(spawnSync(process.execPath, [path.join(follower, ".contrejour/dist/tools/memory.js"), "list", "--role", "planner", "--project", follower], { encoding: "utf8" }).stdout);
+  assert.deepEqual(learned.entries.map((entry: { id: string; evidence: string[] }) => [entry.id, entry.evidence]), [["one-module-a-round", ["run 1", "from the published project maker"]]]);
+  assert.ok(fs.existsSync(path.join(follower, ".claude/loops/iterate-and-check.zh.json")), "the loop comes with its translation");
   assert.match(fs.readFileSync(path.join(follower, ".claude/agents/owner-review.md"), "utf8"), /A project's improvement to a base role/, "the example's version of a base role takes its place");
   assert.ok(fs.existsSync(path.join(follower, ".claude/agents/planner.md")));
   assert.deepEqual(read(path.join(follower, ".contrejour/loop.json")), { schema_version: 1, loop: "iterate-and-check", params: { max_rounds: 3 } });
@@ -830,12 +937,15 @@ try {
   fs.writeFileSync(path.join(misnamed, "reference.json"), JSON.stringify({ name: "maker", task_loop: "iterate-and-check" }));
   assert.throws(() => applyExample(follower, misnamed, "community"), /is not an example project/);
   // Published again after a change: only what changed, and what the project no longer has is removed.
-  assert.equal(plan(maker).digest, null, "the community already has exactly this project");
+  assert.equal(plan(maker, ...leftOut).digest, null, "the community already has exactly this project");
   fs.appendFileSync(path.join(maker, ".claude/agents/planner.md"), "\nLearned later.\n");
   fs.rmSync(path.join(maker, ".claude/agents/builder.md"));
-  published = plan(maker);
+  published = plan(maker, ...leftOut);
   assert.deepEqual(published.selected.map((unit: { name: string; state: string }) => [unit.name, unit.state]), [["planner", "changed"]]);
   assert.deepEqual(published.removed, ["projects/maker/roles/builder.md"]);
+  // A memory entry superseded since is removed from the community's copy.
+  assert.equal(makerMemory("update", "--role", "planner", "--id", "one-module-a-round", "--status", "superseded").status, 0);
+  assert.deepEqual(plan(maker, ...leftOut).removed, ["projects/maker/memory/planner/one-module-a-round.json", "projects/maker/roles/builder.md"]);
   // A project of the same name that did not publish it cannot overwrite it.
   const other = path.join(sandbox, "elsewhere", "maker");
   fs.mkdirSync(path.dirname(other), { recursive: true });

@@ -521,4 +521,4 @@ const why = sent
     : {};
 return { loop: drafted ? drafted.loop : "", installed: false, reason, ...why };
 
-// contrejour-loop-definition-sha256: 034936c972040073dfe62f7c3625cdafc9c4e90a622ad3e56ddd64063decf4bd
+// contrejour-loop-definition-sha256: 92c4973f58e9509c95d3c80e1f5575be04f0a2baa273764b08d45ed699c12e9a

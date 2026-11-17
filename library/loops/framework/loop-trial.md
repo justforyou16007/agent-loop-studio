@@ -1,6 +1,6 @@
 ---
 name: loop-trial
-description: Check a loop the way it will run — its static check, then a trial run for real on a small scale, the owner's judgement of whether what it did serves their goal, and an improvement of the loop or its roles before the next trial, until the owner is satisfied.
+description: Check a loop the way it will run — its static check, then a trial run for real on a small scale, the owner's judgement of whether what it did serves their goal, and what its roles learned written into their memory before the next trial, until the owner is satisfied; a change to the loop's own steps is only suggested to the owner, who alone changes a loop.
 side: framework
 kind: on-request
 triggers: record-trajectory, guard-owner-answers
@@ -12,7 +12,7 @@ check-args: [{"loop": "loop-authoring", "goal": "Change the loop the owner names
 
 ## Purpose
 
-The static check runs a loop's script with stand-in roles: it shows that every step can be reached and every role exists, not that the loop does what its owner wants. This loop checks a loop the way it will run. After the static check, it runs the loop for real on a small scale, with the trial arguments its definition declares (`trial-args`, chosen so that a trial stays inside the project), and `loop-tester` reads what the run did against the owner's goal. The owner judges whether that serves the goal. When it does not, the loop is improved as the owner says, its steps through `loop-authoring` and its roles' memory through `project-memory`, and the loop is tried again. The owner runs it on any loop, before its real work or after changing it: `setup`'s hand-off and the Studio's Trial offer it.
+The static check runs a loop's script with stand-in roles: it shows that every step can be reached and every role exists, not that the loop does what its owner wants. This loop checks a loop the way it will run. After the static check, it runs the loop for real on a small scale, with the trial arguments its definition declares (`trial-args`, chosen so that a trial stays inside the project), and `loop-tester` reads what the run did against the owner's goal. The owner judges whether that serves the goal. When it does not, `project-memory` writes what the roles should do differently into their memory, and the loop is tried again. Only the owner changes a loop: a change to the loop's own steps is suggested, the loop ends with the suggestion, and the owner makes the change, if they want it, by asking for it (`loop-authoring`). The owner runs it on any loop, before its real work or after changing it: `setup`'s hand-off and the Studio's Trial offer it.
 
 ## Inputs
 
@@ -26,7 +26,7 @@ The static check runs a loop's script with stand-in roles: it shows that every s
 2. **Trial run** — `loop-tester` prepares the trial (`{action: "prepare", loop, goal, round}`): the arguments the definition's `trial-args` gives, with what the loop's Inputs need besides, or why the loop cannot be tried (it declares no trial arguments, or it runs loops of its own); then the loop ends with that reason. Otherwise the loop runs as one step with those arguments and the owner's answers; when it stops for the owner, its waiting result is returned as it is.
 3. **Assess** — `loop-tester` reads what the trial did, its result and the trajectories of the roles that ran in it, against the goal, and writes the trial report (`{action: "assess", loop, goal, round, since, result}`): what each step did, what it produced, and where it went another way than the goal wants.
 4. **Goal review** — `owner-review` puts the report to the owner (`review_id` `trial:<loop>:<round>`): does what the loop did serve the goal? Approval ends the loop, the loop judged fit; `cancel` ends it; `revise` goes to step 5 with the owner's words.
-5. **Improve** — `loop-tester` turns the owner's words and the report into what to change (`{action: "plan-fix", loop, report_file, notes}`): a change to the loop's steps, which the child loop `loop-authoring` makes (`{description}`, the owner approving the draft in its own review), and what its roles should do differently, which `project-memory` writes into their memory from the trial's trajectories (`{action: "trial", loop, since, report_file, notes}`). Then the next round starts at step 1.
+5. **Improve** — `loop-tester` turns the owner's words and the report into what to change (`{action: "plan-fix", loop, report_file, notes}`): what the roles should do differently, which `project-memory` writes into their memory from the trial's trajectories (`{action: "trial", loop, since, report_file, notes}`), and a change to the loop's own steps, which is only a suggestion. When there is a suggestion, the loop ends with it (`suggested_change`, with the report), after the memory is written: the owner changes the loop, or not. Otherwise the next round starts at step 1.
 
 ## Bounds
 
@@ -34,11 +34,11 @@ The static check runs a loop's script with stand-in roles: it shows that every s
 
 ## Send back
 
-Every step checks what it receives against its role's Inputs. A step that cannot use an input sends it back (`send_back`) to the step that made it, which runs again with `returned` (that step and its problems); then the step runs again on what it makes. Assess may send the trial's arguments back to the preparation, which prepares them again before the loop is run again, or the trial's result back to the loop tried, which runs again with `returned` in its arguments; the plan of fixes and the role fixes may send the report back to Assess. A child loop that sends back what it was given has it made again and runs again: the loop tried, its arguments (prepared again); `loop-authoring`, the loop it was to regenerate (checked again) or the change it was to make (planned again). The static check and the preparation may send back only to the caller. Past 2 send-backs in a row, or when what a step cannot use is the loop's own input, the loop ends with `sent_back`: the step, where it sent the input, and the problems.
+Every step checks what it receives against its role's Inputs. A step that cannot use an input sends it back (`send_back`) to the step that made it, which runs again with `returned` (that step and its problems); then the step runs again on what it makes. Assess may send the trial's arguments back to the preparation, which prepares them again before the loop is run again, or the trial's result back to the loop tried, which runs again with `returned` in its arguments; the plan of fixes and the role fixes may send the report back to Assess. A child loop that sends back what it was given has it made again and runs again: the loop tried, its arguments (prepared again); `loop-authoring`, the loop it was to regenerate (checked again). The static check and the preparation may send back only to the caller. Past 2 send-backs in a row, or when what a step cannot use is the loop's own input, the loop ends with `sent_back`: the step, where it sent the input, and the problems.
 
 ## Waiting
 
-Steps 2, 4 and 5 wait for the owner: step 4 directly, steps 2 and 5 in their child loops. The loop returns `{waiting: "owner", review_id, question, document}`, and the session runs it again with the reply in `answers`.
+Steps 2 and 4 wait for the owner: step 4 directly, step 2 in the loop tried. The loop returns `{waiting: "owner", review_id, question, document}`, and the session runs it again with the reply in `answers`.
 
 ## Triggers
 

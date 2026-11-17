@@ -16,7 +16,7 @@ import { useLang } from "./i18n.js";
 import { Markdown } from "./Markdown.js";
 import { Badge, Button, cx, formatValue } from "./ui.js";
 
-function Frame({
+export function Frame({
   open,
   onClose,
   title,

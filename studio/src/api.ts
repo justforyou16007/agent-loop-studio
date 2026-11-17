@@ -8,6 +8,7 @@ import type {
   OutputList,
   Overview,
   ProjectsInfo,
+  PublishPlan,
   RoleDetail,
   SearchResult,
   SessionTimeline,
@@ -60,6 +61,15 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   return reply;
 }
 
+/**
+ * The language the page shows: what a loop shows (its description, steps, arrows,
+ * parameters) comes in it when the loop has a translation. Set by the page.
+ */
+let language: string | undefined;
+export const setLanguage = (lang: string): void => {
+  language = lang;
+};
+
 export interface AuthoringRequest {
   loop: "loop-authoring" | "role-authoring";
   base: { name: string; source: LoopSource } | null;
@@ -68,13 +78,15 @@ export interface AuthoringRequest {
 }
 
 export const api = {
-  overview: () => get<Overview>("/api/overview"),
-  flow: (name: string, source?: LoopSource) => get<Flow>(`/api/flow?${query({ name, source })}`),
+  overview: () => get<Overview>(`/api/overview?${query({ lang: language })}`),
+  flow: (name: string, source?: LoopSource) =>
+    get<Flow>(`/api/flow?${query({ name, source, lang: language })}`),
   loop: (name: string, source?: LoopSource) =>
-    get<LoopDetail>(`/api/loop?${query({ name, source })}`),
+    get<LoopDetail>(`/api/loop?${query({ name, source, lang: language })}`),
   role: (name: string) => get<RoleDetail>(`/api/role?${query({ name })}`),
-  search: (q: string) => get<SearchResult>(`/api/search?${query({ q })}`),
-  conversations: () => get<{ conversations: AuthoringStatus[] }>("/api/authoring"),
+  search: (q: string) => get<SearchResult>(`/api/search?${query({ q, lang: language })}`),
+  conversations: () =>
+    get<{ conversations: AuthoringStatus[] }>(`/api/authoring?${query({ lang: language })}`),
   startAuthoring: (request: AuthoringRequest) => post<{ id: string }>("/api/authoring", request),
   projects: () => get<ProjectsInfo>("/api/projects"),
   openProject: (name: string) =>
@@ -117,6 +129,8 @@ export const api = {
     get<OutputList>(`/api/outputs?${query(filter)}`),
   /** Every loop the Studio runs here, with how it stands. */
   executions: () => get<{ executions: AuthoringStatus[] }>("/api/executions"),
+  /** The latest plan of the project's publication, which the publish loop's review is about. */
+  publishPlan: () => get<{ plan: PublishPlan | null }>("/api/publish/plan"),
   /** Resume a loop run where it stopped. */
   resume: (id: string) => post<{ id: string; run: string }>("/api/executions/resume", { id }),
   answer: (id: string, text: string, references: CanvasPointer[]) =>

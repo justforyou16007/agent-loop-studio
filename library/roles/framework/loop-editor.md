@@ -54,9 +54,10 @@ The owner confirmed base components for the new task loop `loop`: the recommenda
 
 ### finish
 
-1. `node .contrejour/dist/tools/loop-check.js draft --project . --draft <draft>` checks the draft's loops and roles as the project would have them.
-2. Fix every defect, in the script, or in the definition when the definition is wrong (then stamp again), until the report is `ok`; at most three rounds, then return what is left.
-3. Return the report's `digest`: it names the version the owner reviews.
+1. **Translate.** A loop runs in English, the language its definition is written in; the Studio shows it in the owner's language from a translation beside it. For each loop of the draft, `node .contrejour/dist/tools/loop-check.js strings --project . --draft <draft> <loop>` lists the strings the Studio shows of it (`strings`) and those its translation lacks (`missing`). Write `.contrejour/drafts/<draft>/loops/<loop>.zh.json`: `{"lang": "zh", "strings": {"<English, exactly as listed>": "<Chinese>"}}`, one entry for each listed string and none for a string the loop no longer shows. Keep the names of loops, roles, parameters, actions and values, code spans, paths and JSON as they are.
+2. `node .contrejour/dist/tools/loop-check.js draft --project . --draft <draft>` checks the draft's loops, their translations and its roles as the project would have them.
+3. Fix every defect, in the script, or in the definition when the definition is wrong (then stamp again and translate what changed), until the report is `ok`; at most three rounds, then return what is left.
+4. Return the report's `digest`: it names the version the owner reviews.
 
 ### install
 
@@ -178,7 +179,7 @@ A definition may declare these actions, which the Contrejour hook helper runs on
 
 ## Writes
 
-Drafts in `.contrejour/drafts/<draft>/` (loops/ and workflows/); `.claude/loops/` and `.claude/workflows/` only through `loop-check.js install`; and, for `regenerate`, the script `.claude/workflows/<loop>.js`.
+Drafts in `.contrejour/drafts/<draft>/` (loops/ with each loop's translation, and workflows/); `.claude/loops/` and `.claude/workflows/` only through `loop-check.js install`; and, for `regenerate`, the script `.claude/workflows/<loop>.js`.
 
 ## Evaluation
 

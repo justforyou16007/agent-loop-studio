@@ -255,7 +255,7 @@ for (let attempt = 1; attempt <= 6; attempt += 1) {
   const decided = await review(id, {
     subject: `the project, published to the community library as ${plan.name}`,
     request:
-      "Approve publishing exactly this as a pull request to the community library, or say what to leave out or put back, or change its name, title or description.",
+      "Approve publishing exactly this as a pull request to the community library, or say what to leave out or put back (a loop, a role, or a memory entry as <role>/<id>), or change its name, title or description.",
     materials: {
       name: plan.name,
       description: plan.description,
@@ -304,4 +304,4 @@ for (let attempt = 1; attempt <= 6; attempt += 1) {
 }
 return { published: false, reason: "no plan was approved within 6 rounds" };
 
-// contrejour-loop-definition-sha256: 3ffb2c7009869cee8cbb8216d47e3fa028c406c932d1b81d2189d973142683ac
+// contrejour-loop-definition-sha256: 09f956a43bddafa56f24fa54d877333ef0712b8cd6b9fa1086d208f838351473

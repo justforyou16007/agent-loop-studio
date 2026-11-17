@@ -89,6 +89,8 @@ export interface Flow {
   /** Other sections of the definition (bounds, waiting, inputs…), Markdown. */
   sections: { title: string; markdown: string }[];
   parameter_problem: string | null;
+  /** The language its strings were asked in (`en` when none was): the page asks again when it shows another. */
+  lang?: string;
 }
 export interface Candidate extends LoopSummary {
   score: number;
@@ -116,6 +118,8 @@ export interface Overview {
   loops: LoopSummary[];
   roles: RoleSummary[];
   generated_at: string;
+  /** The language its loops' strings were asked in (`en` when none was). */
+  lang?: string;
 }
 export interface RoleDetail extends RoleSummary {
   tools: string;
@@ -188,6 +192,41 @@ export interface AuthoringStatus {
   } | null;
   /** Its latest run stopped partway, and the session waits: it can be resumed where it stopped. */
   resumable: boolean;
+}
+/** A memory entry as a publication carries it: what a role learned, which the owner reviews entry by entry. */
+export interface PublishedMemory {
+  role: string;
+  id: string;
+  kind: string;
+  title: string;
+  /** The kinds of task it applies to. */
+  tasks: string[];
+  body: string;
+  evidence: string[];
+}
+/** One unit of a publication plan: a loop, a role, what the project is, or one memory entry (`<role>/<id>`). */
+export interface PublishUnit {
+  kind: "role" | "loop" | "project" | "memory";
+  name: string;
+  side: string | null;
+  description: string;
+  /** `new` and `changed` leave; the others say why not (`excluded`: the owner left it out). */
+  state: string;
+  reason?: string;
+  warnings: string[];
+  memory?: PublishedMemory;
+}
+/** The latest plan of the project's publication, as the owner reviews it (`.contrejour/publish/plan.json`). */
+export interface PublishPlan {
+  name: string;
+  /** What the publish loop's review names (`publish:<digest>`); null when nothing would leave. */
+  digest: string | null;
+  selected: PublishUnit[];
+  not_selected: PublishUnit[];
+  /** Files of the community's copy that publishing removes. */
+  removed: string[];
+  library_check: { ok: boolean; defects: string[] } | null;
+  check: string;
 }
 /** A session the Studio runs, as it changes: sent to the page as it goes. */
 export interface LiveEvent {

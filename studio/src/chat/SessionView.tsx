@@ -4,6 +4,7 @@ import {
   ChevronRight,
   Eye,
   Info,
+  ListChecks,
   ListCollapse,
   Loader2,
   Play,
@@ -61,6 +62,7 @@ export function SessionView({
   live,
   pending,
   onReply,
+  onReview,
   onStop,
   onNewConversation,
   onViewFiles,
@@ -75,6 +77,8 @@ export function SessionView({
   pending: PendingReply[];
   /** A quick reply to the review it waits at, while it waits. */
   onReply?: (text: string) => void;
+  /** Open the page of the review it waits at, for a review that has one (publishing, entry by entry). */
+  onReview?: (reviewId: string) => void;
   onStop?: () => Promise<void>;
   onNewConversation?: () => void;
   onViewFiles: (files: { name: string; text: string; original: string | null }[]) => void;
@@ -207,6 +211,7 @@ export function SessionView({
         live={live}
         startedAt={startedAt}
         onReply={onReply}
+        onReview={onReview}
         onStop={onStop}
         onNewConversation={onNewConversation}
         onViewFiles={onViewFiles}
@@ -615,6 +620,7 @@ function Footer({
   live,
   startedAt,
   onReply,
+  onReview,
   onStop,
   onNewConversation,
   onViewFiles,
@@ -623,6 +629,7 @@ function Footer({
   live: boolean;
   startedAt: string;
   onReply?: (text: string) => void;
+  onReview?: (reviewId: string) => void;
   onStop?: () => Promise<void>;
   onNewConversation?: () => void;
   onViewFiles: (files: { name: string; text: string; original: string | null }[]) => void;
@@ -695,6 +702,11 @@ function Footer({
         )}
         {status.review?.question && (
           <p className="text-[13px] font-semibold text-ink">{status.review.question}</p>
+        )}
+        {onReview && status.review?.review_id.startsWith("publish:") && (
+          <Button size="sm" variant="primary" onClick={() => onReview(status.review!.review_id)}>
+            <ListChecks size={13} /> {t("publish_review_open")}
+          </Button>
         )}
         {onReply && (
           <div className="flex flex-wrap items-center gap-1.5">

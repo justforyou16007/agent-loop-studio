@@ -385,6 +385,17 @@ export function queryMemory(
   return { role, task, entries, more: ranked.length - entries.length, flagged };
 }
 
+/**
+ * Every current entry of a role's memory, by id, those that read like an
+ * injection too: what would leave with the project when it is published, for
+ * the publisher to judge and the owner to review entry by entry.
+ */
+export function currentEntries(root: string, role: string): MemoryEntry[] {
+  return [...replay(readEvents(memoryDir(root, role))).values()]
+    .filter((entry) => entry.status === "current")
+    .sort((a, b) => (a.id < b.id ? -1 : 1));
+}
+
 /** The roles that have a memory, with how many current entries each holds. */
 export function memoryRoles(root: string): { role: string; entries: number }[] {
   const base = path.join(path.resolve(root), "memory");

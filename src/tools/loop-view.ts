@@ -22,6 +22,7 @@ import {
   libraryRoots,
   sidesOf,
 } from "./installation.js";
+import { flowOf } from "./flow.js";
 import { checkLoop, splitScript, type LoopReport } from "./loop-check.js";
 import { client } from "./loop-view-client.js";
 import {
@@ -35,7 +36,15 @@ import {
   selectedLoopPath,
   setupFinishedAt,
 } from "./loops.js";
-import { isRecord } from "./validate.js";
+import {
+  flowStrings,
+  missingStrings,
+  readTranslations,
+  translationFile,
+  type Lang,
+  type Strings,
+} from "./translations.js";
+import { failA1, isRecord } from "./validate.js";
 
 export interface StepView {
   kind: "step" | "note";
@@ -84,6 +93,8 @@ export interface LoopView {
   children: string[];
   definition: string;
   script: string | null;
+  /** What the Studio shows of it in the owner's language, by language. */
+  translations: Partial<Record<Lang, Strings>>;
   check: LoopReport | null;
   runs: RunView[];
 }
@@ -248,6 +259,8 @@ interface LoopFile {
   definition: string;
   script: string | null;
   framework?: boolean;
+  /** What the Studio shows of it in the owner's language, by language. */
+  translations?: Partial<Record<Lang, Strings>>;
 }
 
 /**
@@ -282,6 +295,7 @@ function libraryFiles(root: string) {
             source: "library",
             definition: readText(path.join(loopDir, file)) ?? "",
             script: readText(path.join(loopDir, `${file.slice(0, -3)}.js`)),
+            translations: readTranslations(path.join(loopDir, file)),
           });
       const roleDir = path.join(library, "library", "roles", dir);
       for (const file of markdownFiles(roleDir))
@@ -421,6 +435,7 @@ async function describeLoop(file: LoopFile, context: LoopContext): Promise<LoopV
     children,
     definition: file.definition,
     script: file.script,
+    translations: file.translations ?? {},
     check,
     runs: runs.get(file.name) ?? [],
   };
@@ -488,7 +503,12 @@ function exampleOf(root: string): string | null {
 }
 
 /** Everything the page shows, read from the project (and its library) as it is now. */
-export async function collectView(projectRoot: string, live = false): Promise<ViewData> {
+export async function collectView(
+  projectRoot: string,
+  live = false,
+  /** Run the loop check on the project's loops; what only reads their text leaves it out. */
+  check = true,
+): Promise<ViewData> {
   const root = path.resolve(projectRoot);
   let side = "unknown";
   let library: string | null = null;
@@ -525,6 +545,7 @@ export async function collectView(projectRoot: string, live = false): Promise<Vi
       definition,
       script: readText(loopScriptPath(root, name)),
       framework: isBase("loops", name, definition),
+      translations: readTranslations(loopDefinitionPath(root, name)),
     };
   });
   for (const loop of extra.loops)
@@ -545,7 +566,7 @@ export async function collectView(projectRoot: string, live = false): Promise<Vi
   }
   const runs = runsByLoop(root, runNames);
 
-  const context: LoopContext = { root, roleNames, loopNames, chosen, runs, check: true };
+  const context: LoopContext = { root, roleNames, loopNames, chosen, runs, check };
   const loops: LoopView[] = [];
   for (const file of loopFiles) loops.push(await describeLoop(file, context));
   const roles = roleFiles.map((file) => describeRole(file, loops));
@@ -568,6 +589,43 @@ export async function collectView(projectRoot: string, live = false): Promise<Vi
   };
 }
 
+/**
+ * What the Studio shows of a loop of the project (or of a draft laid over it),
+ * which its translation into `lang` translates, and the strings that
+ * translation lacks. A loop's English definition is the authority; the
+ * translation, `<loop>.<lang>.json` beside it, only changes what the page shows.
+ */
+export async function shownStrings(
+  projectRoot: string,
+  name: string,
+  options: { draft?: string; lang?: Lang } = {},
+): Promise<{ loop: string; lang: Lang; file: string; strings: string[]; missing: string[] }> {
+  const root = path.resolve(projectRoot);
+  const lang = options.lang ?? "zh";
+  const drafted = options.draft ? await collectDraftView(root, options.draft, false) : null;
+  if (options.draft && !drafted) failA1("NO_DRAFT", `there is no draft ${options.draft}`);
+  const view = drafted ? drafted.view : await collectView(root, false, false);
+  const loop =
+    view.loops.find((entry) => entry.name === name && entry.source === "project") ??
+    view.loops.find((entry) => entry.name === name);
+  if (!loop) failA1("NOT_FOUND", `there is no loop ${name}`);
+  const draftDefinition = options.draft
+    ? path.join(root, ".contrejour", "drafts", options.draft, "loops", `${name}.md`)
+    : null;
+  const definition =
+    draftDefinition && fs.existsSync(draftDefinition)
+      ? draftDefinition
+      : loopDefinitionPath(root, name);
+  const strings = flowStrings(flowOf(view, loop));
+  return {
+    loop: name,
+    lang,
+    file: path.relative(root, translationFile(definition, lang)).split(path.sep).join("/"),
+    strings,
+    missing: missingStrings(strings, loop.translations[lang] ?? {}),
+  };
+}
+
 /** A draft in `.contrejour/drafts/<draft>/`: the loops and roles it holds, as the page shows them. */
 export interface DraftView {
   draft: string;
@@ -579,11 +637,12 @@ export interface DraftView {
 export async function collectDraftView(
   projectRoot: string,
   draft: string,
+  check = true,
 ): Promise<DraftView | null> {
   const root = path.resolve(projectRoot);
   const dir = path.join(root, ".contrejour", "drafts", draft);
   if (!/^[a-z0-9][a-z0-9-]*$/.test(draft) || !fs.existsSync(dir)) return null;
-  const base = await collectView(root);
+  const base = await collectView(root, false, check);
   const draftRoles: RoleFile[] = markdownFiles(path.join(dir, "agents")).map((file) => ({
     name: file.slice(0, -3),
     source: "project",
@@ -594,6 +653,7 @@ export async function collectDraftView(
     source: "project",
     definition: readText(path.join(dir, "loops", file)) ?? "",
     script: readText(path.join(dir, "workflows", `${file.slice(0, -3)}.js`)),
+    translations: readTranslations(path.join(dir, "loops", file)),
   }));
   const roleNames = new Set([
     ...base.roles.map((role) => role.name),

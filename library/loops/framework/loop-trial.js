@@ -1,7 +1,7 @@
 export const meta = {
   name: "loop-trial",
   description:
-    "Check a loop the way it will run: static check, a trial run for real, the owner's judgement against their goal, improve, try again",
+    "Check a loop the way it will run: static check, a trial run for real, the owner's judgement against their goal, its roles' memory written, try again; a change to the loop itself is suggested to the owner",
   whenToUse:
     'When the owner wants to try a loop before its real work, or after changing it. Run it with {"loop": "<loop>", "goal": "<what it should achieve, in their words>"}, then again with the owner\'s replies in answers.',
   phases: [
@@ -265,27 +265,11 @@ for (let round = 1; round <= 4; round += 1) {
         phase: "Improve",
       },
     );
-  let fix = await step("loop-tester:plan-fix", () => planFix(null), {
+  const fix = await step("loop-tester:plan-fix", () => planFix(null), {
     "loop-tester:assess": reassess,
   });
   if (fix.waiting) return fix;
   if (fix.sent_back) return { fit: false, loop, sent_back: fix.sent_back };
-  if (fix.loop_change) {
-    // A change loop-authoring cannot use as described is planned again, and made from the new plan.
-    const authored = await child(
-      "loop-authoring",
-      () => workflow("loop-authoring", { description: fix.loop_change, answers }),
-      async (back) => {
-        const again = await step("loop-tester:plan-fix", () => planFix(back), {
-          "loop-tester:assess": reassess,
-        });
-        if (!again.sent_back && !again.waiting) fix = again;
-        return again;
-      },
-    );
-    if (authored && authored.waiting) return authored;
-    if (authored && authored.sent_back) return { fit: false, loop, sent_back: authored.sent_back };
-  }
   if (fix.role_fixes) {
     const optimized = await step(
       "project-memory:trial",
@@ -309,7 +293,16 @@ for (let round = 1; round <= 4; round += 1) {
     if (optimized.waiting) return optimized;
     if (optimized.sent_back) return { fit: false, loop, sent_back: optimized.sent_back };
   }
+  // Only the owner changes a loop: a change to its own steps is suggested, and the loop ends with it.
+  if (fix.loop_change)
+    return {
+      fit: false,
+      loop,
+      reason: "the trial showed a change to the loop's own steps, which only the owner makes",
+      suggested_change: fix.loop_change,
+      report: assessed.report_file,
+    };
 }
 return { fit: false, loop, reason: "the owner did not judge it fit within 4 trial rounds" };
 
-// contrejour-loop-definition-sha256: f902143cf86a5a1d6957627be559bc9abf71aa0aaf1495c3530ac05636bee087
+// contrejour-loop-definition-sha256: b0ea377f106fa5bf418ce5a5f74d1cf23b1dc99329085ca65323ca1126ac936a

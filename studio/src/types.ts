@@ -53,4 +53,6 @@ export interface ChatMessage {
   status?: import("../../src/tools/studio-types.js").AuthoringStatus | null;
   /** What the owner sent it that its transcript does not show yet. */
   replies?: { text: string; at: string }[];
+  /** How the project's executions stood when the owner asked, for the chat's status report. */
+  executions?: import("../../src/tools/studio-types.js").AuthoringStatus[];
 }

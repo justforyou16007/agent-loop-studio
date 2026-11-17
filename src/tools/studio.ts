@@ -19,8 +19,21 @@ import { createCli, runCli } from "../lib/cli.js";
 import { flowOf, searchLoops, summarize } from "./flow.js";
 import { collectView, fingerprint, type ViewData } from "./loop-view.js";
 import { SessionHost, type HostOptions, type LiveSession } from "./agent-sessions.js";
-import { COMMUNITY_LIBRARY, COMMUNITY_URL, installedLibrary, isProject } from "./installation.js";
+import {
+  COMMUNITY_LIBRARY,
+  COMMUNITY_URL,
+  installedLibrary,
+  isProject,
+  publishPlanFile,
+} from "./installation.js";
 import { projectOutputs } from "./outputs.js";
+import {
+  TRANSLATED,
+  translateFlow,
+  translateSummary,
+  type Lang,
+  type Strings,
+} from "./translations.js";
 import { useLoop } from "./project-loop.js";
 import { writeStateJsonAtomic } from "./state-file.js";
 import {
@@ -333,6 +346,18 @@ export async function serveStudio(
         head,
       );
     }
+    // The latest plan of the project's publication, for the owner's review of it entry by entry.
+    if (url.pathname === "/api/publish/plan") {
+      if (request.method !== "GET" && request.method !== "HEAD")
+        return json(response, 405, { error: "GET only" }, head);
+      let plan: unknown = null;
+      try {
+        plan = JSON.parse(fs.readFileSync(publishPlanFile(root), "utf8"));
+      } catch {
+        plan = null;
+      }
+      return json(response, 200, { plan: isRecord(plan) ? plan : null }, head);
+    }
     if (url.pathname === "/api/executions/resume") {
       if (request.method !== "POST") return json(response, 405, { error: "POST only" });
       const body = await readBody(request);
@@ -383,6 +408,14 @@ export async function serveStudio(
     const source = url.searchParams.get("source");
     const loopOf = () =>
       data.loops.find((loop) => loop.name === name && (!source || loop.source === source));
+    // What the page shows in the owner's language: a loop's translation, where it has one.
+    const lang = (TRANSLATED as readonly string[]).includes(url.searchParams.get("lang") ?? "")
+      ? (url.searchParams.get("lang") as Lang)
+      : null;
+    const translationOf = (loop: { translations: Partial<Record<Lang, Strings>> } | undefined) =>
+      (lang && loop?.translations[lang]) || {};
+    const summaryIn = (loop: ViewData["loops"][number]) =>
+      translateSummary(summarize(loop), translationOf(loop));
     switch (url.pathname) {
       case "/api/overview": {
         const overview: Overview = {
@@ -396,7 +429,7 @@ export async function serveStudio(
             setup_finished: data.project.setup_finished,
             example: data.project.example,
           },
-          loops: data.loops.map(summarize),
+          loops: data.loops.map(summaryIn),
           roles: data.roles.map((role) => ({
             name: role.name,
             source: role.source,
@@ -405,20 +438,26 @@ export async function serveStudio(
             description: role.description,
           })),
           generated_at: data.project.generated_at,
+          lang: lang ?? "en",
         };
         return json(response, 200, overview, head);
       }
       case "/api/flow": {
         const loop = loopOf();
         return loop
-          ? json(response, 200, flowOf(data, loop), head)
+          ? json(
+              response,
+              200,
+              { ...translateFlow(flowOf(data, loop), translationOf(loop)), lang: lang ?? "en" },
+              head,
+            )
           : json(response, 404, { error: `no loop ${name}` }, head);
       }
       case "/api/loop": {
         const loop = loopOf();
         if (!loop) return json(response, 404, { error: `no loop ${name}` }, head);
         const detail: LoopDetail = {
-          loop: summarize(loop),
+          loop: summaryIn(loop),
           definition: loop.definition,
           script: loop.script,
           defects: loop.check?.defects ?? [],
@@ -432,8 +471,20 @@ export async function serveStudio(
         const detail: RoleDetail = { ...role };
         return json(response, 200, detail, head);
       }
-      case "/api/search":
-        return json(response, 200, searchLoops(data, url.searchParams.get("q") ?? ""), head);
+      case "/api/search": {
+        const found = searchLoops(data, url.searchParams.get("q") ?? "");
+        const candidates = found.candidates.map((candidate) =>
+          translateSummary(
+            candidate,
+            translationOf(
+              data.loops.find(
+                (loop) => loop.name === candidate.name && loop.source === candidate.source,
+              ),
+            ),
+          ),
+        );
+        return json(response, 200, { ...found, candidates }, head);
+      }
       default:
         return json(response, 404, { error: "not found" }, head);
     }
@@ -633,7 +684,15 @@ export async function serveStudio(
       }
       if (url.pathname !== "/api/authoring")
         return json(response, 404, { error: "not found" }, head);
-      return json(response, 200, { conversations: await conversationStatuses(root, agents) }, head);
+      // A draft under review is shown in the page's language too, from the translation its draft carries.
+      const asked = url.searchParams.get("lang") ?? "";
+      const lang = (TRANSLATED as readonly string[]).includes(asked) ? (asked as Lang) : null;
+      return json(
+        response,
+        200,
+        { conversations: await conversationStatuses(root, agents, 5, lang) },
+        head,
+      );
     }
     const body = await readBody(request);
     const text = typeof body.text === "string" ? body.text.trim() : "";

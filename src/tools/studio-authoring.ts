@@ -15,6 +15,7 @@ import type { SessionHost } from "./agent-sessions.js";
 import { flowOf } from "./flow.js";
 import { entryRoleOf } from "./installation.js";
 import { collectDraftView } from "./loop-view.js";
+import { translateFlow, type Lang } from "./translations.js";
 import {
   lastAssistantText,
   latestRun,
@@ -245,6 +246,7 @@ function readNote(root: string, document: string): string {
 async function draftOf(
   root: string,
   review: AuthoringStatus["review"],
+  lang: Lang | null,
 ): Promise<ConversationStatus["draft"]> {
   const named = /^(loop|role):([a-z0-9][a-z0-9-]*):/.exec(review?.review_id ?? "");
   if (!named) return null;
@@ -263,7 +265,14 @@ async function draftOf(
   }));
   return {
     name: named[2]!,
-    flow: named[1] === "loop" && loop ? flowOf(draft.view, loop) : null,
+    // In the page's language, from the translation the draft carries (`loop-editor` writes it before the review).
+    flow:
+      named[1] === "loop" && loop
+        ? {
+            ...translateFlow(flowOf(draft.view, loop), (lang && loop.translations[lang]) || {}),
+            lang: lang ?? "en",
+          }
+        : null,
     roles: draft.roles,
     files,
   };
@@ -345,6 +354,8 @@ export async function conversationStatuses(
   projectRoot: string,
   host: SessionHost,
   count = 5,
+  /** The language a draft under review is shown in. */
+  lang: Lang | null = null,
 ): Promise<ConversationStatus[]> {
   const root = path.resolve(projectRoot);
   const conversations = readStore(root).slice(-count);
@@ -387,7 +398,7 @@ export async function conversationStatuses(
       review,
       note: review ? readNote(root, review.document) || lastAssistantText(entries) : "",
       result: state === "done" ? last : null,
-      draft: review ? await draftOf(root, review) : null,
+      draft: review ? await draftOf(root, review, lang) : null,
       progress: state === "running" ? runProgress(transcript) : [],
       reply_failed: replyFailed,
       last_words: replyFailed ? lastAssistantText(entries) : "",

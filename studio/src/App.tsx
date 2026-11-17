@@ -18,15 +18,16 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AuthoringStatus, Flow, Overview } from "../../src/tools/studio-types.js";
-import { api } from "./api.js";
+import type { AuthoringStatus, Flow, Overview, PublishPlan } from "../../src/tools/studio-types.js";
+import { api, setLanguage } from "./api.js";
 import { Inspector } from "./canvas/Inspector.js";
 import { FlowCanvas, focusedIds, pointablesOf } from "./canvas/FlowCanvas.js";
-import { ChatPanel } from "./chat/ChatPanel.js";
+import { ChatPanel, type ExecutionAction } from "./chat/ChatPanel.js";
 import { followSessions } from "./chat/live.js";
 import { LangContext, translate, useLang, type Lang, type TextKey } from "./i18n.js";
 import { ParamsDialog, RoleDraftDialog, RunDialog } from "./dialogs.js";
 import { openingOf } from "./opening.js";
+import { PublishReviewDialog } from "./PublishReviewDialog.js";
 import { DefinitionDialog, PreviewDialog, type LoopRef } from "./PreviewDialog.js";
 import { RolesPage } from "./pages/RolesPage.js";
 import { ProjectsPage } from "./pages/ProjectsPage.js";
@@ -99,7 +100,11 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 export function App() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [lang, setLang] = useState<Lang>(() => storedLang() ?? "zh");
+  const [lang, setLang] = useState<Lang>(() => {
+    const initial = storedLang() ?? "zh";
+    setLanguage(initial);
+    return initial;
+  });
   const [page, setPage] = useState<Page>("compose");
   const [flow, setFlow] = useState<Flow | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -123,6 +128,10 @@ export function App() {
   const [roleDraft, setRoleDraft] = useState<
     { name: string; text: string; original: string | null }[] | null
   >(null);
+  /** The publication plan the publish loop's review is about, while its page is open. */
+  const [publishReview, setPublishReview] = useState<PublishPlan | null>(null);
+  /** The review whose page opened by itself: once each. */
+  const reviewOpened = useRef("");
   /** What the chat points out on the canvas, the rest greyed. */
   const [focus, setFocus] = useState<Focus | null>(null);
   const [chatWidth, setChatWidth] = useState(storedChatWidth);
@@ -178,13 +187,33 @@ export function App() {
     }
   }, []);
 
+  /** Switch the page's language: what is asked for from now on comes in it. */
+  const changeLang = useCallback((next: Lang) => {
+    setLanguage(next);
+    setLang(next);
+  }, []);
+  // What loops show comes in the page's language, from their translations. What is shown says the
+  // language it was asked in, so the project's loops and the loop on the canvas are asked for again
+  // whenever that is not the page's: after a switch, or when a request crossed one.
+  useEffect(() => setLanguage(lang), [lang]);
+  useEffect(() => {
+    if (overview && (overview.lang ?? "en") !== lang) void load();
+  }, [overview, lang, load]);
+  useEffect(() => {
+    if (!flow || (flow.lang ?? "en") === lang) return;
+    api
+      .flow(flow.loop.name, flow.loop.source)
+      .then(setFlow)
+      .catch(() => undefined);
+  }, [flow, lang]);
+
   /** The page for the project open now. */
   /** The page for the project open now, and what bringing it up to the framework did when it was opened. */
   const begin = useCallback(
     (update?: ProjectUpdate) => {
       void load().then((data) => {
         if (!data) return;
-        if (!storedLang()) setLang(data.project.language);
+        if (!storedLang()) changeLang(data.project.language);
         say({ from: "studio", key: "welcome" });
         if (update?.problem)
           say({
@@ -229,12 +258,53 @@ export function App() {
         if (opening.loop) void open({ name: opening.loop, source: "project" }, true);
       });
     },
-    [load, say, open],
+    [load, say, open, changeLang],
   );
   useEffect(() => {
     begin();
     // Runs once, when the page opens.
   }, []);
+  /** The page of the publish loop's review: the plan it is about, when that is the latest plan. */
+  const openPublishReview = async (reviewId: string) => {
+    try {
+      const { plan } = await api.publishPlan();
+      if (plan?.digest && `publish:${plan.digest}` === reviewId) setPublishReview(plan);
+      else say({ from: "studio", key: "publish_review_missing" });
+    } catch (reason) {
+      say({ from: "studio", text: t("load_failed") + (reason as Error).message });
+    }
+  };
+  // The publish loop stops for the owner's review: its page opens by itself, once.
+  useEffect(() => {
+    const id = status?.state === "waiting" ? (status.review?.review_id ?? "") : "";
+    if (!id.startsWith("publish:") || reviewOpened.current === id) return;
+    reviewOpened.current = id;
+    void openPublishReview(id);
+  }, [status]);
+  /** How the project's loops stand now, as a report in the chat: the Studio answers, no session is asked. */
+  const showStatus = async () => {
+    const waiting = say({ from: "studio", key: "status_asking", pending: true });
+    try {
+      const { executions } = await api.executions();
+      replace(waiting, { from: "studio", key: "status_report", executions });
+    } catch (reason) {
+      replace(waiting, { from: "studio", text: t("load_failed") + (reason as Error).message });
+    }
+  };
+  /** What the owner did to an execution of the status report: see it, stop it, or resume it. */
+  const onExecution = async (action: ExecutionAction, picked: AuthoringStatus) => {
+    if (action === "open") return openExecution(picked);
+    try {
+      if (action === "stop") await api.stop(picked.id);
+      else {
+        const resumed = await api.resume(picked.id);
+        say({ from: "studio", key: "exec_resumed", values: { run: resumed.run } });
+      }
+      await showStatus();
+    } catch (reason) {
+      say({ from: "studio", text: t("load_failed") + (reason as Error).message });
+    }
+  };
   /** An execution the owner picked on its page: the chat shows its conversation where it is. */
   const openExecution = (open: AuthoringStatus) => {
     setConversation(open.id);
@@ -446,7 +516,7 @@ export function App() {
       clearTimeout(again);
       unfollow();
     };
-  }, [conversation, status?.state === "running"]);
+  }, [conversation, status?.state === "running", lang]);
 
   // The session's message keeps its conversation's latest status, for when the chat has moved on.
   useEffect(() => {
@@ -707,7 +777,7 @@ export function App() {
               size="sm"
               onClick={() => {
                 const next = lang === "zh" ? "en" : "zh";
-                setLang(next);
+                changeLang(next);
                 try {
                   localStorage.setItem(LANG_KEY, next);
                 } catch {
@@ -765,6 +835,9 @@ export function App() {
                     onNewConversation={leaveConversation}
                     queued={queued?.text ?? null}
                     onUnqueue={() => setQueued(null)}
+                    onStatus={() => void showStatus()}
+                    onExecution={(action, picked) => void onExecution(action, picked)}
+                    onReview={(reviewId) => void openPublishReview(reviewId)}
                     names={names}
                     focus={focus}
                     onFocus={toggleFocus}
@@ -975,6 +1048,14 @@ export function App() {
         />
       )}
       <RoleDraftDialog files={roleDraft} onClose={() => setRoleDraft(null)} />
+      <PublishReviewDialog
+        plan={publishReview}
+        onClose={() => setPublishReview(null)}
+        onReply={(text) => {
+          setPublishReview(null);
+          void send(text, []);
+        }}
+      />
     </LangContext.Provider>
   );
 }

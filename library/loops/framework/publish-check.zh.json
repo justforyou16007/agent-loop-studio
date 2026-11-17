@@ -1,0 +1,21 @@
+{
+  "lang": "zh",
+  "strings": {
+    "The project's own check of exactly what would leave, when its rules ask for one — a step of publish. The framework's puts the files to the owner; a package's side gives its projects a check of its own instead.": "项目规则要求时，对正好要发出的内容做项目自己的检查，是 publish 的一步。框架自带的这个版本把文件交给你看；项目包的某一端可以给它的项目换上自己的检查。",
+    "Some projects hold what must never leave them, and say so through their extension: then nothing they publish leaves before a check of their own has passed exactly those files, recorded on the plan's digest. A package whose projects need a particular check (a leak review against hidden tests, say) gives its side a `publish-check` of its own, which takes this one's place. This one, for a project that asks for a check and has none of its own, makes the owner the check.": "有些项目里有绝不能流出的东西，它们通过自己的扩展声明这一点：这时它们发布的任何东西，都要先由它们自己的检查对正好那些文件放行，并记在计划的摘要上，才能发出。如果项目包里的项目需要特定的检查（比如针对隐藏测试的泄漏审查），就给它那一端配一个自己的 `publish-check`，替换掉这个。对于要求检查却没有自己检查的项目，这个版本让你来做检查。",
+    "Check": "检查",
+    "`owner-review` asks the owner to read exactly these files for anything this project's rules say must stay here (`review_id` `check:<digest>`). Approval passes them; `revise` fails them with the owner's words as the finding; `cancel` fails them.": "`owner-review` 请你通读正好这些文件，看有没有项目规则说必须留在这里的东西（`review_id` `check:<digest>`）。批准即放行；`revise` 判为不通过，你的话作为发现记下；`cancel` 判为不通过。",
+    "Record": "记录",
+    "`project-publisher` records the verdict on the digest (`{action: \"record-check\", digest, verdict, findings}`), and the loop ends with it: `{verdict, findings}`.": "`project-publisher` 把结论记在摘要上（`{action: \"record-check\", digest, verdict, findings}`），流程以它结束：`{verdict, findings}`。",
+    "Inputs": "输入",
+    "- `digest`: the digest of the plan whose files are checked.\n- `files`: the paths of exactly the files that would leave.\n- `answers`: the owner's replies so far, by review id; the session adds each one as it comes (see `running-loops.md`).": "- `digest`：被检查文件所属计划的摘要。\n- `files`：正好要发出的那些文件的路径。\n- `answers`：你到目前为止的回复，按审核编号（review id）存放；每来一条，会话就加进去（见 `running-loops.md`）。",
+    "Bounds": "上限",
+    "One check per plan.": "每份计划检查一次。",
+    "Send back": "打回",
+    "Record checks what it receives against its role's Inputs: the digest and the files are the caller's, so what it cannot use goes back to the caller, and the loop ends with `sent_back` (the step and the problems) and the verdict `fail`. The owner's review sends nothing back: their `revise` is their own.": "“记录”对照自己角色的 Inputs 检查收到的东西：摘要和文件都来自调用方，所以用不了的东西打回给调用方，流程以 `sent_back`（哪一步和问题）以及结论 `fail` 结束。你的审核不打回任何东西：你的 `revise` 就是你自己的意见。",
+    "Waiting": "等待",
+    "Step 1 waits for the owner: the loop returns `{waiting: \"owner\", review_id, question, document}`, and the session runs it again with the reply in `answers`.": "第 1 步会等你：流程返回 `{waiting: \"owner\", review_id, question, document}`，会话把你的回复放进 `answers` 再运行它。",
+    "Triggers": "触发器",
+    "- `record-trajectory`: every role that finishes leaves its trajectory.\n- `guard-owner-answers`: every answer the session passes in is the owner's own message, typed after the loop stopped at that review; anything else is blocked before the loop runs.": "- `record-trajectory`：每个角色结束时都留下它的轨迹。\n- `guard-owner-answers`：会话传进来的每个回答都必须是你本人的消息，而且是在流程停在那次审核之后打的；其他的都会在流程运行前被拦下。"
+  }
+}

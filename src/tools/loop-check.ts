@@ -42,6 +42,7 @@ import {
 } from "./loops.js";
 import { libraryRoots } from "./installation.js";
 import { insertMemory, readSeeds, slugOf, updateMemory } from "./memory.js";
+import { TRANSLATED, type Lang } from "./translations.js";
 import { hasManifest, knownSides, readManifest, triggersOf } from "./project-manifest.js";
 
 /** Sections every role file has, so its work, its inputs and how it is judged are explicit. */
@@ -842,12 +843,13 @@ function briefProblems(text: string): string[] {
 
 const DRAFT_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 /** Where a draft keeps its files, as .claude/ would hold them. */
-const DRAFT_LAYOUT: Record<string, string> = {
-  agents: ".md",
-  loops: ".md",
-  workflows: ".js",
+const DRAFT_LAYOUT: Record<string, string[]> = {
+  agents: [".md"],
+  // A loop's definition, in English, and its translation of what the Studio shows of it.
+  loops: [".md", ...TRANSLATED.map((lang) => `.${lang}.json`)],
+  workflows: [".js"],
   // A role's first memory entries, one JSON object per line, written into its memory on install.
-  memory: ".jsonl",
+  memory: [".jsonl"],
 };
 /** What of a draft goes into .claude/; its memory entries go to the roles' memories. */
 const CLAUDE_PARTS = ["agents", "loops", "workflows"];
@@ -860,18 +862,21 @@ export function draftDir(root: string, id: string): string {
 }
 function draftFiles(dir: string): string[] {
   const files: string[] = [];
-  for (const [sub, extension] of Object.entries(DRAFT_LAYOUT)) {
+  for (const [sub, extensions] of Object.entries(DRAFT_LAYOUT)) {
     const folder = path.join(dir, sub);
     if (!fs.existsSync(folder)) continue;
     for (const file of fs.readdirSync(folder))
-      if (file.endsWith(extension) && fs.statSync(path.join(folder, file)).isFile())
+      if (
+        extensions.some((extension) => file.endsWith(extension)) &&
+        fs.statSync(path.join(folder, file)).isFile()
+      )
         files.push(`${sub}/${file}`);
   }
   return files.sort();
 }
 function draftNames(root: string, id: string, sub: "agents" | "loops"): string[] {
   return draftFiles(draftDir(root, id))
-    .filter((file) => file.startsWith(`${sub}/`))
+    .filter((file) => file.startsWith(`${sub}/`) && file.endsWith(".md"))
     .map((file) => file.slice(sub.length + 1, -3));
 }
 /** Line endings say nothing about what a loop or role does. */
@@ -975,6 +980,20 @@ export async function checkDraft(root: string, id: string): Promise<DraftReport>
       }
     }
     for (const report of roles) report.ok = !report.defects.length;
+    // Read here, not at load: the view reads the check, and the check reads it only for drafts.
+    const { shownStrings } = await import("./loop-view.js");
+    for (const name of draftNames(root, id, "loops")) {
+      const report = loops.find((entry) => entry.loop === name);
+      if (!report) continue;
+      for (const lang of TRANSLATED) {
+        const { file, missing } = await shownStrings(root, name, { draft: id, lang });
+        if (!missing.length) continue;
+        report.defects.push(
+          `a loop is written in English, then translated: ${file} lacks ${missing.length} of the strings the Studio shows of it (loop-check.js strings lists them)`,
+        );
+        report.ok = false;
+      }
+    }
     // A script without its definition, here or in the project, is reported by the loop's check.
     const scripts = files.filter((file) => file.startsWith("workflows/"));
     for (const script of scripts) {
@@ -1157,6 +1176,31 @@ function cli(): void {
           options.draft
             ? await withDraft(options.project, options.draft, listComponents)
             : listComponents(options.project),
+          true,
+        );
+      } catch (error) {
+        failed(error);
+      }
+    });
+  program
+    .command("strings")
+    .description(
+      "What the Studio shows of a loop, which its translation translates, and what the translation lacks",
+    )
+    .requiredOption("--project <dir>")
+    .option("--draft <id>", "the loop as the draft has it")
+    .option("--lang <lang>", "the translation's language", "zh")
+    .argument("<loop>")
+    .action(async (loop: string, options: { project: string; draft?: string; lang: string }) => {
+      try {
+        if (!(TRANSLATED as readonly string[]).includes(options.lang))
+          failA1("INVALID_VALUE", `a loop is translated into ${TRANSLATED.join(", ")}`);
+        const { shownStrings } = await import("./loop-view.js");
+        print(
+          await shownStrings(options.project, loop, {
+            ...(options.draft ? { draft: options.draft } : {}),
+            lang: options.lang as Lang,
+          }),
           true,
         );
       } catch (error) {

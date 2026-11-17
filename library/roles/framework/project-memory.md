@@ -41,7 +41,7 @@ The project's rules (`.claude/skills/shared-references/project-rules.md`, when t
 
 ### trial
 
-The owner tried `loop` and said what in the trial did not serve their goal. Read the trial report (`report_file`), the owner's words, and the index entries of the roles that finished after `since` while `loop` ran, with their transcripts. For each problem the owner or the report names, find the role and the step that caused it, and write it into that role's memory as in `optimize`, steps 3 to 5; a trial is one run, so act on what the owner named even when it did not recur. A problem in what the loop does (its steps, their order, its bounds) is not a role's: `loop-trial` changes the loop through `loop-authoring`.
+The owner tried `loop` and said what in the trial did not serve their goal. Read the trial report (`report_file`), the owner's words, and the index entries of the roles that finished after `since` while `loop` ran, with their transcripts. For each problem the owner or the report names, find the role and the step that caused it, and write it into that role's memory as in `optimize`, steps 3 to 5; a trial is one run, so act on what the owner named even when it did not recur. A problem in what the loop does (its steps, their order, its bounds) is not a role's, and not yours to fix: `loop-trial` suggests the change to the owner, who alone changes a loop.
 
 ### pending
 

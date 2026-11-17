@@ -50,6 +50,7 @@ if (stamp)
 
 if (!fs.existsSync(checker)) throw new Error("Run npm run build first: dist/tools/publish-cli.js is missing.");
 const { checkLibrary } = await import(pathToFileURL(checker).href);
-const { ok, reports } = await checkLibrary(library, manifest);
+// The framework's own loops are shown in Chinese too: each has a whole translation.
+const { ok, reports } = await checkLibrary(library, manifest, { translations: true });
 console.log(JSON.stringify(reports, null, 2));
 process.exitCode = ok ? 0 : 1;

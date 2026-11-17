@@ -24,6 +24,7 @@ import {
   installedLibrary,
   installedRole,
   libraryRoots,
+  publishPlanFile,
   sidesOf,
   COMMUNITY_LIBRARY,
   COMMUNITY_URL,
@@ -50,6 +51,10 @@ import { writeStateJsonAtomic } from "./state-file.js";
 import { scanForThreats } from "./threat-scan.js";
 import { A1Error, failA1, isRecord } from "./validate.js";
 import { KEY_SHAPES } from "./secrets.js";
+import { shownStrings } from "./loop-view.js";
+import { TRANSLATED, translationFile } from "./translations.js";
+import { currentEntries, memoryRoles, type MemoryEntry } from "./memory.js";
+import type { PublishedMemory } from "./studio-types.js";
 
 type State =
   /** Sent: the community's copy of the project does not have it yet. */
@@ -75,6 +80,8 @@ type State =
   /** Not sent: the owner left it out. */
   | "excluded";
 const SENDABLE: readonly State[] = ["new", "changed"];
+/** States in which the community's copy is, or becomes, exactly the project's: the others keep the published copy as it is. */
+const MIRRORED: readonly State[] = [...SENDABLE, "in-library", "already-sent"];
 
 interface PlanFile {
   source: string;
@@ -84,7 +91,7 @@ interface PlanFile {
   preview?: string;
 }
 interface PlanUnit {
-  kind: "role" | "loop" | "project";
+  kind: "role" | "loop" | "project" | "memory";
   name: string;
   side: string | null;
   /** The library it goes to, by name, once it has a side. */
@@ -94,6 +101,8 @@ interface PlanUnit {
   reason?: string;
   warnings: string[];
   files: PlanFile[];
+  /** A memory entry's unit: the entry, as the owner reviews it. */
+  memory?: PublishedMemory;
 }
 interface ResolvedView {
   available: true;
@@ -519,6 +528,50 @@ function classifyRole(context: PlanContext, name: string): Classified {
     before: new Map(theirs === null ? [] : [[target, theirs]]),
   };
 }
+/**
+ * One entry of a role's memory, a unit of its own (`<role>/<id>`): the owner
+ * reviews the entries one by one and leaves out any of them. Every role's
+ * current entries leave, the framework's roles' too: what the project learned
+ * is its own, whoever's role learned it.
+ */
+function classifyMemory(context: PlanContext, role: string, entry: MemoryEntry): Classified {
+  const memory: PublishedMemory = {
+    role,
+    id: entry.id,
+    kind: entry.kind,
+    title: entry.title,
+    tasks: entry.tasks,
+    body: entry.body,
+    evidence: entry.evidence,
+  };
+  const { role: _role, ...published } = memory;
+  const text = `${JSON.stringify(published, null, 2)}\n`;
+  const target = `projects/${context.name}/memory/${role}/${entry.id}.json`;
+  const theirs = showAtBase(context.community, target);
+  const sent = context.sent.get(target) ?? new Set<string>();
+  let { state, reason } = context.taken
+    ? { state: "conflict" as State, reason: TAKEN(context.name) }
+    : stateAgainstPublished(text, theirs, sent);
+  if (SENDABLE.includes(state) && sent.has(sha256(text))) {
+    state = "already-sent";
+    reason = "an earlier publication of this project already carries exactly this";
+  }
+  return {
+    kind: "memory",
+    name: `${role}/${entry.id}`,
+    side: null,
+    library: COMMUNITY_LIBRARY,
+    description: entry.title,
+    state,
+    ...(reason ? { reason } : {}),
+    warnings: [],
+    files: [{ source: `memory/${role}/pages/${entry.id}.md`, target, sha256: sha256(text) }],
+    finals: new Map([[target, text]]),
+    before: new Map(theirs === null ? [] : [[target, theirs]]),
+    memory,
+  };
+}
+
 const TAKEN = (name: string) =>
   `another project is published as ${name}: publish this one under another name`;
 
@@ -528,6 +581,13 @@ async function classifyLoop(context: PlanContext, name: string): Promise<Classif
   const scriptSource = `.claude/workflows/${name}.js`;
   const definition = readText(loopDefinitionPath(root, name)) ?? "";
   const script = readText(loopScriptPath(root, name)) ?? "";
+  // What the Studio shows of the loop, in the languages it is translated into: it travels with the loop.
+  const translations = TRANSLATED.flatMap((lang) => {
+    const text = readText(translationFile(loopDefinitionPath(root, name), lang));
+    return text === null
+      ? []
+      : [{ source: `.claude/loops/${name}.${lang}.json`, ours: text, ext: `${lang}.json` }];
+  });
   const fields = frontmatter(definition);
   const unit: Classified = {
     kind: "loop",
@@ -556,6 +616,15 @@ async function classifyLoop(context: PlanContext, name: string): Promise<Classif
       readText(seededFile(root, scriptSource)),
       frameworkText(context, "loops", `${name}.js`),
     ),
+    ...translations.map((translation) =>
+      leftAsInstalled(
+        context,
+        translation.source,
+        translation.ours,
+        readText(seededFile(root, translation.source)),
+        frameworkText(context, "loops", `${name}.${translation.ext}`),
+      ),
+    ),
   ];
   if (lefts.every((left) => left === "yes")) return unit;
   if (lefts.includes("unknown")) return { ...unit, state: "unknown-base", reason: UNKNOWN_BASE };
@@ -578,6 +647,7 @@ async function classifyLoop(context: PlanContext, name: string): Promise<Classif
   const pairs = [
     { source: definitionSource, ours: definition, ext: "md" },
     { source: scriptSource, ours: script, ext: "js" },
+    ...translations,
   ].map((pair) => {
     const target = `projects/${context.name}/loops/${name}.${pair.ext}`;
     const theirs = showAtBase(context.community, target);
@@ -590,8 +660,16 @@ async function classifyLoop(context: PlanContext, name: string): Promise<Classif
       verdict: stateAgainstPublished(pair.ours, theirs, sent),
     };
   });
+  // A loop is written in English and shown in the owner's language: one without a whole translation is shown partly in English.
+  const shown = await shownStrings(root, name);
+  const warnings = shown.missing.length
+    ? [
+        `its Chinese translation (${name}.zh.json) lacks ${shown.missing.length} of the ${shown.strings.length} strings the Studio shows of it, which a Chinese page shows in English: loop-check.js strings lists them`,
+      ]
+    : [];
   const whole = {
     ...unit,
+    warnings,
     files: pairs.map((pair) => ({
       source: pair.source,
       target: pair.target,
@@ -659,6 +737,8 @@ function writeFinals(dir: string, units: Classified[]): void {
 export async function checkLibrary(
   library: string,
   manifest?: ProjectManifest,
+  /** The framework's own library: every loop has a whole translation of what the Studio shows of it. */
+  options: { translations?: boolean } = {},
 ): Promise<{
   ok: boolean;
   reports: Record<string, { check: LoopReport[]; roles: RoleReport[] }>;
@@ -703,6 +783,8 @@ export async function checkLibrary(
         [`loops/${side}`, "loops", ".md"],
         ["loops/framework", "workflows", ".js"],
         [`loops/${side}`, "workflows", ".js"],
+        ["loops/framework", "loops", ".zh.json"],
+        [`loops/${side}`, "loops", ".zh.json"],
       ] as const) {
         const source = path.join(library, from);
         fs.mkdirSync(path.join(project, ".claude", to), { recursive: true });
@@ -719,6 +801,15 @@ export async function checkLibrary(
         if (declared !== directory) {
           report.defects.push(`it declares side ${declared}, but lives under ${directory}`);
           report.ok = false;
+        }
+        if (options.translations) {
+          const { missing } = await shownStrings(project, name);
+          if (missing.length) {
+            report.defects.push(
+              `its Chinese translation (${name}.zh.json) lacks ${missing.length} of the strings the Studio shows of it, such as: ${missing.slice(0, 3).join(" | ").slice(0, 300)}`,
+            );
+            report.ok = false;
+          }
         }
         check.push(report);
       }
@@ -906,7 +997,18 @@ function filesAtBase(library: LibrarySource, dir: string): string[] {
     .filter(Boolean);
 }
 
+/** Plan the publication, and keep the plan where the Studio reads it while the owner reviews it. */
 async function makePlan(
+  root: string,
+  exclude: string[],
+  chosenName?: string,
+): Promise<{ plan: PublicPlan; selected: Classified[]; community: LibrarySource | null }> {
+  const made = await computePlan(root, exclude, chosenName);
+  writeStateJsonAtomic(publishPlanFile(root), made.plan);
+  return made;
+}
+
+async function computePlan(
   root: string,
   exclude: string[],
   chosenName?: string,
@@ -982,6 +1084,9 @@ async function makePlan(
     for (const file of fs.readdirSync(roles).sort())
       if (file.endsWith(".md")) units.push(classifyRole(context, file.slice(0, -3)));
   for (const loop of listLoops(root)) units.push(await classifyLoop(context, loop));
+  for (const { role } of memoryRoles(root))
+    for (const entry of currentEntries(root, role))
+      units.push(classifyMemory(context, role, entry));
 
   // What the project is: reference.json, which a new project started from it reads.
   const reference = publishedReference(root, name);
@@ -1036,13 +1141,25 @@ async function makePlan(
   const selected = units.filter((unit) => SENDABLE.includes(unit.state));
   // What the community's copy has that the project no longer does: a loop or role it removed, or one it now leaves as the framework gives it.
   // A loop or role the project still has keeps its published copy, even while it fails its check or is left out.
+  // A memory entry is kept while it is current (one left out keeps an earlier publication's copy); a superseded one is removed.
   const kept = new Set(
     units
       .filter((unit) => unit.state !== "unchanged" && unit.kind !== "project")
       .flatMap((unit) =>
-        unit.kind === "role"
-          ? [`${dir}/roles/${unit.name}.md`]
-          : [`${dir}/loops/${unit.name}.md`, `${dir}/loops/${unit.name}.js`],
+        unit.kind === "memory"
+          ? unit.files.map((file) => file.target)
+          : unit.kind === "role"
+            ? [`${dir}/roles/${unit.name}.md`]
+            : [
+                `${dir}/loops/${unit.name}.md`,
+                `${dir}/loops/${unit.name}.js`,
+                // Its translation, unless the publication mirrors the loop and the project has none.
+                ...TRANSLATED.map((lang) => `${dir}/loops/${unit.name}.${lang}.json`).filter(
+                  (target) =>
+                    !MIRRORED.includes(unit.state) ||
+                    unit.files.some((file) => file.target === target),
+                ),
+              ],
       ),
   );
   kept.add(referenceTarget);
@@ -1279,7 +1396,7 @@ function pullRequestText(plan: PublicPlan, units: Classified[]): { title: string
     .filter((unit) => unit.kind !== "project")
     .map(
       (unit) =>
-        `| ${unit.kind} | \`${unit.name}\` | ${unit.side} | ${unit.state} | ${unit.description.replace(/\|/g, "\\|")} |`,
+        `| ${unit.kind} | \`${unit.name}\` | ${unit.side ?? "—"} | ${unit.state} | ${unit.description.replace(/\|/g, "\\|")} |`,
     );
   const body = [
     `Published from the Studio by a ${plan.side} project after ${plan.finished_tasks.length} finished task(s), with its owner's approval: \`projects/${plan.name}/\`, an example any project can start from.`,
@@ -1472,7 +1589,10 @@ function cli(): void {
     )
     .requiredOption("--project <dir>")
     .option("--name <name>", "the name to publish it under (default: the project's folder name)")
-    .option("--exclude <names>", "comma-separated loops and roles the owner leaves out")
+    .option(
+      "--exclude <names>",
+      "comma-separated loops, roles and memory entries (<role>/<id>) the owner leaves out",
+    )
     .action((options: { project: string; name?: string; exclude?: string }) =>
       action(
         async () =>

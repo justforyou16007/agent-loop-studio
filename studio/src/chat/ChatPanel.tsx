@@ -1,4 +1,5 @@
 import {
+  Activity,
   ArrowRight,
   ArrowUp,
   AtSign,
@@ -17,13 +18,15 @@ import {
   X,
 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import type { Candidate } from "../../../src/tools/studio-types.js";
+import type { AuthoringStatus, Candidate } from "../../../src/tools/studio-types.js";
 import { sentenceParts, useLang, type TextKey } from "../i18n.js";
 import { Markdown } from "../Markdown.js";
 import { SessionView } from "./SessionView.js";
 import type { LoopRef } from "../PreviewDialog.js";
 import type { ChatMessage, Focus, Names, Pointable, Reference } from "../types.js";
 import { Badge, Button, cx, LoopBadges } from "../ui.js";
+import { ExecutionCard } from "../ExecutionCard.js";
+import { isStatusCommand } from "./commands.js";
 
 /** The @ being typed just before the caret, and what follows it so far; none inside a word, such as an e-mail address. */
 function mentionAt(text: string, caret: number): { start: number; query: string } | null {
@@ -36,6 +39,9 @@ function mentionAt(text: string, caret: number): { start: number; query: string 
   return { start, query };
 }
 const squeeze = (text: string): string => text.toLowerCase().replace(/\s+/g, "");
+/** What the owner can do about an execution the chat's status report lists. */
+export type ExecutionAction = "open" | "stop" | "resume";
+
 const KIND_ICONS = { node: Box, edge: ArrowRight, param: SlidersHorizontal } as const;
 
 export function ChatPanel({
@@ -64,6 +70,9 @@ export function ChatPanel({
   onNewConversation,
   queued,
   onUnqueue,
+  onStatus,
+  onExecution,
+  onReview,
 }: {
   messages: ChatMessage[];
   references: Reference[];
@@ -100,6 +109,12 @@ export function ChatPanel({
   /** A message waiting for the session's turn to end. */
   queued: string | null;
   onUnqueue: () => void;
+  /** How the project's loops stand now: a report in the chat, asked of no session. */
+  onStatus: () => void;
+  /** Stop, resume or show an execution the status report lists. */
+  onExecution: (action: ExecutionAction, status: AuthoringStatus) => void;
+  /** Open the page of the review the conversation waits at, for a review that has one (publishing). */
+  onReview: (reviewId: string) => void;
 }) {
   const { t } = useLang();
   const [draft, setDraft] = useState("");
@@ -197,6 +212,13 @@ export function ChatPanel({
 
   const send = () => {
     const text = draft.trim();
+    if (isStatusCommand(text)) {
+      onStatus();
+      setDraft("");
+      setMention(null);
+      toEnd(true);
+      return;
+    }
     if ((!text && !references.length) || busy) return;
     onSend(text);
     if (text) sent.current = [...sent.current.filter((known) => known !== text), text].slice(-50);
@@ -213,7 +235,16 @@ export function ChatPanel({
       <header className="flex items-center gap-2 border-b border-line px-4 py-3">
         <Sparkles size={16} className="text-brand-600" />
         <h2 className="text-sm font-semibold">{t("chat")}</h2>
-        <span className="text-xs text-ink-4">{t("chat_hint")}</span>
+        <span className="truncate text-xs text-ink-4">{t("chat_hint")}</span>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="ml-auto shrink-0"
+          title={t("status_hint")}
+          onClick={onStatus}
+        >
+          <Activity size={13} /> {t("status_button")}
+        </Button>
       </header>
       <div className="relative min-h-0 flex-1">
         <div
@@ -254,6 +285,8 @@ export function ChatPanel({
                 conversation={conversation}
                 onStop={onStop}
                 onNewConversation={onNewConversation}
+                onExecution={onExecution}
+                onReview={onReview}
               />
             ))}
             {onlyWelcome && (
@@ -534,6 +567,8 @@ function Message({
   conversation,
   onStop,
   onNewConversation,
+  onExecution,
+  onReview,
 }: {
   message: ChatMessage;
   onPreview: (target: LoopRef) => void;
@@ -548,6 +583,8 @@ function Message({
   conversation: string | null;
   onStop: () => Promise<void>;
   onNewConversation: () => void;
+  onExecution: (action: ExecutionAction, status: AuthoringStatus) => void;
+  onReview: (reviewId: string) => void;
 }) {
   const { t } = useLang();
   if (message.from === "owner")
@@ -599,6 +636,7 @@ function Message({
             live={message.session === conversation}
             pending={message.replies ?? []}
             onReply={message.session === conversation ? onReply : undefined}
+            onReview={message.session === conversation && onReply ? onReview : undefined}
             onStop={message.session === conversation ? onStop : undefined}
             onNewConversation={message.session === conversation ? onNewConversation : undefined}
             onViewFiles={onViewFiles}
@@ -648,6 +686,24 @@ function Message({
               <X size={13} /> {t("cancel")}
             </Button>
             <span className="text-[11px] text-ink-4">{t("revise_hint")}</span>
+          </div>
+        )}
+        {message.executions && (
+          <div className="space-y-1.5">
+            {message.executions.length === 0 && (
+              <p className="text-xs text-ink-4">{t("executions_none")}</p>
+            )}
+            {message.executions.map((status) => (
+              <ExecutionCard
+                key={status.id}
+                status={status}
+                compact
+                busy={false}
+                onStop={() => onExecution("stop", status)}
+                onResume={() => onExecution("resume", status)}
+                onOpen={() => onExecution("open", status)}
+              />
+            ))}
           </div>
         )}
         {message.candidates?.map((candidate) => (

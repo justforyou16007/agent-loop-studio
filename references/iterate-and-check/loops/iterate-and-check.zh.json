@@ -1,0 +1,31 @@
+{
+  "lang": "zh",
+  "strings": {
+    "Work on the project's task in rounds — plan from the task and the planner's memory, build, check against the task's criteria, record what worked and what did not — and stop for the owner's review when the check passes or the rounds run out.": "一轮一轮地做项目的任务：根据任务和 planner 的记忆做计划，构建，按任务的标准检查，记下哪些成了、哪些没成；检查通过或轮数用完时停下来请你审核。",
+    "A general way to work on the task the owner wrote in `task.md`: plan, build, check, learn, and try again with what was learned. Every round leaves what it learned in the planner's memory, so the next round, and the next run, start from it. A starting point: change it in the Studio to fit the work.": "处理你写在 `task.md` 里的任务的一种通用做法：计划、构建、检查、总结，再带着学到的东西重试。每一轮都把学到的东西留在 planner 的记忆里，所以下一轮、下一次运行都从这里出发。这是个起点：在 Studio 里按你的工作改它。",
+    "Plan": "计划",
+    "`planner` queries its memory, reads `task.md` and plans this round (`{action: \"plan\", round, findings}`): what to build, and the criteria the check applies.": "`planner` 查询自己的记忆，读 `task.md`，规划这一轮（`{action: \"plan\", round, findings}`）：要构建什么，以及检查要用的标准。",
+    "Build": "构建",
+    "`builder` carries out the plan (`{action: \"build\", plan}`) and reports what it made and where.": "`builder` 执行计划（`{action: \"build\", plan}`），报告做出了什么、放在哪里。",
+    "Check": "检查",
+    "`checker` checks what was built against the criteria (`{action: \"check\", plan, criteria, built, files}`): whether it passed, with its findings.": "`checker` 按标准检查构建出的东西（`{action: \"check\", plan, criteria, built, files}`）：是否通过，以及发现的问题。",
+    "Record": "记录",
+    "`project-memory` records the round in the planner's memory (`{action: \"record\", what, outcome, evidence, role: \"planner\"}`): what worked, or what failed and why. When the check failed and rounds are left, the loop goes back to step 1 with the findings.": "`project-memory` 把这一轮记进 planner 的记忆（`{action: \"record\", what, outcome, evidence, role: \"planner\"}`）：什么做成了，或者什么失败了、为什么。检查没通过且还有轮数时，流程带着发现回到第 1 步。",
+    "Review": "审核",
+    "`owner-review` shows the owner the result (`review_id` `result:<digest>`, the checker's digest of what it checked). Approval ends the loop with the result; `revise` goes back to step 1 with the owner's words as findings; `cancel` ends the loop.": "`owner-review` 把结果给你看（`review_id` `result:<digest>`，即 checker 对它检查过的内容算出的摘要）。批准则流程以结果结束；`revise` 把你的话作为发现带回第 1 步；`cancel` 结束流程。",
+    "When the check failed and rounds are left": "检查没通过且还有轮数时",
+    "Approval / cancel": "批准 / 取消",
+    "revise": "修改",
+    "How many rounds of plan, build, check and record before the owner sees the result.": "在你看到结果之前，最多做几轮“计划、构建、检查、记录”。",
+    "Inputs": "输入",
+    "- `params`: the parameter values the owner chose in the Studio.\n- `answers`: the owner's replies so far, by review id; the session adds each one as it comes (see `running-loops.md`).": "- `params`：你在 Studio 里选定的参数值。\n- `answers`：你到目前为止的回复，按审核编号（review id）存放；每来一条，会话就加进去（见 `running-loops.md`）。",
+    "Bounds": "上限",
+    "At most `max_rounds` rounds before each review, and at most 3 reviews; at most 2 send-backs in a row by any step.": "每次审核前最多 `max_rounds` 轮，最多审核 3 次；任何一步最多连续打回 2 次。",
+    "Send back": "打回",
+    "Every step checks what it receives against its role's Inputs. A step that cannot use an input sends it back (`send_back`) to the step that made it, which runs again with `returned` (that step and its problems); then the step runs again on what it makes. Build may send the plan back to Plan; Check may send the plan back to Plan, which is then built again, or what was built back to Build; Record may send the check back to Check; Plan may send the last check's findings back to Check. Plan may send the task, or the owner's words after a review, back to the caller. Past 2 send-backs in a row, or when what a step cannot use is the loop's own input, the loop ends with `sent_back`: the step, where it sent the input, and the problems.": "每个步骤都会对照自己角色的 Inputs 检查收到的东西。用不了某个输入的步骤，会把它打回（`send_back`）给做出它的那一步；那一步带着 `returned`（打回它的步骤和问题）重做，然后这一步再用重做的结果重新运行。“构建”可以把计划打回给“计划”；“检查”可以把计划打回给“计划”（之后会重新构建），或把构建出的东西打回给“构建”；“记录”可以把检查结果打回给“检查”；“计划”可以把上一次检查的发现打回给“检查”。“计划”可以把任务，或审核后你的话，打回给调用方。连续打回超过 2 次，或者用不了的是流程自己的输入时，流程以 `sent_back` 结束：说明是哪一步、打回给了谁、问题是什么。",
+    "Waiting": "等待",
+    "Step 5 waits for the owner: the loop returns `{waiting: \"owner\", review_id, question, document}`, and the session runs it again with the reply in `answers`.": "第 5 步会等你：流程返回 `{waiting: \"owner\", review_id, question, document}`，会话把你的回复放进 `answers` 再运行它。",
+    "Triggers": "触发器",
+    "- `record-trajectory`: every role that finishes leaves its trajectory.\n- `guard-owner-answers`: every answer the session passes in is the owner's own message, typed after the loop stopped at that review; anything else is blocked before the loop runs.": "- `record-trajectory`：每个角色结束时都留下它的轨迹。\n- `guard-owner-answers`：会话传进来的每个回答都必须是你本人的消息，而且是在流程停在那次审核之后打的；其他的都会在流程运行前被拦下。"
+  }
+}

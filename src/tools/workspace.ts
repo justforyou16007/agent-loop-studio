@@ -15,6 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { COMMUNITY_LIBRARY, installedLibrary, installedRole } from "./installation.js";
 import { readSelectedLoop } from "./loops.js";
+import { currentEntries, insertMemory, updateMemory, type MemoryFields } from "./memory.js";
 import { useLoop } from "./project-loop.js";
 import { hasManifest, readManifest } from "./project-manifest.js";
 import { registerHooks } from "./project-settings.js";
@@ -137,7 +138,7 @@ function seed(root: string, target: string, contents: Buffer): void {
 export function applyReference(
   projectRoot: string,
   name: string,
-): { added: string[]; loop: string } {
+): { added: string[]; loop: string; memory: string[] } {
   const root = path.resolve(projectRoot);
   const found = exampleDirs(installedLibrary(root))
     .map((entry) => ({ dir: path.join(entry.dir, name), source: entry.source }))
@@ -151,13 +152,15 @@ export function applyReference(
  * loop, with its values, the project's. The example's take the place of a
  * framework loop or role of the same name the project still has as installed;
  * what the project got from it is recorded, since it is the project's own to
- * publish. The community library checks each published project this way.
+ * publish. What the example's roles learned (`memory/<role>/<id>.json`, as a
+ * publication carries it) goes into the memory of each role. The community
+ * library checks each published project this way.
  */
 export function applyExample(
   projectRoot: string,
   exampleDir: string,
   source: ReferenceInfo["source"],
-): { added: string[]; loop: string } {
+): { added: string[]; loop: string; memory: string[] } {
   const root = path.resolve(projectRoot);
   const dir = path.resolve(exampleDir);
   const reference = readReference(dir, source);
@@ -171,6 +174,8 @@ export function applyExample(
   for (const [from, to, extension] of [
     ["loops", "loops", ".md"],
     ["loops", "workflows", ".js"],
+    // A loop's translation of what the Studio shows of it.
+    ["loops", "loops", ".zh.json"],
     ["roles", "agents", ".md"],
   ] as const) {
     const units = path.join(dir, from);
@@ -189,12 +194,76 @@ export function applyExample(
       added.push(path.relative(root, target).split(path.sep).join("/"));
     }
   }
+  const memory = rememberExample(root, dir, name);
   useLoop(root, { name: reference.task_loop, params: reference.params ?? {} });
   fs.writeFileSync(
     path.join(root, ".contrejour", "reference.json"),
     `${JSON.stringify({ schema_version: 1, name, source: reference.source, files: added }, null, 2)}\n`,
   );
-  return { added, loop: reference.task_loop };
+  return { added, loop: reference.task_loop, memory };
+}
+
+/**
+ * Put the memory entries an example carries into the memory of their roles:
+ * new ones are inserted, with where they came from added to their evidence; one
+ * the project already has as current is updated when the example's says
+ * otherwise; one the project superseded stays so. Returns `<role>/<id>` of each
+ * entry inserted or updated.
+ */
+function rememberExample(root: string, dir: string, name: string): string[] {
+  const base = path.join(dir, "memory");
+  if (!fs.existsSync(base)) return [];
+  const written: string[] = [];
+  for (const role of fs.readdirSync(base).sort()) {
+    if (!fs.statSync(path.join(base, role)).isDirectory()) continue;
+    const known = new Map(currentEntries(root, role).map((entry) => [entry.id, entry]));
+    for (const file of fs
+      .readdirSync(path.join(base, role))
+      .filter((entry) => entry.endsWith(".json"))
+      .sort()) {
+      const where = `memory/${role}/${file}`;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(fs.readFileSync(path.join(base, role, file), "utf8"));
+      } catch {
+        failA1("INVALID_VALUE", `${where} is not JSON`);
+      }
+      const id = file.slice(0, -".json".length);
+      if (!isRecord(parsed) || (parsed.id !== undefined && parsed.id !== id))
+        failA1("INVALID_VALUE", `${where} is not a memory entry with the id ${id}`);
+      const fields: MemoryFields = {
+        kind: parsed.kind as string,
+        title: parsed.title as string,
+        tasks: parsed.tasks as string[],
+        body: parsed.body as string,
+      };
+      const evidence = Array.isArray(parsed.evidence) ? parsed.evidence.map(String) : [];
+      const current = known.get(id);
+      if (current) {
+        const same =
+          current.kind === fields.kind &&
+          current.title === fields.title &&
+          current.body === fields.body &&
+          JSON.stringify(current.tasks) === JSON.stringify(fields.tasks);
+        if (same) continue;
+        updateMemory(root, role, id, fields);
+      } else {
+        try {
+          insertMemory(root, role, {
+            ...fields,
+            id,
+            evidence: [...evidence, `from the published project ${name}`],
+          });
+        } catch (error) {
+          // The project superseded an entry of this id: what it decided stays.
+          if ((error as { code?: string }).code === "ALREADY_EXISTS") continue;
+          throw error;
+        }
+      }
+      written.push(`${role}/${id}`);
+    }
+  }
+  return written;
 }
 
 const STARTER_TASK = `# Task

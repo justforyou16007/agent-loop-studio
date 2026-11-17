@@ -23,6 +23,9 @@ export const installationFile = (root: string): string =>
 /** Whether a folder is a project: the installer left its record there. */
 export const isProject = (root: string): boolean => fs.existsSync(installationFile(root));
 /** What publish-cli.js keeps about this project's publications to the community library. */
+/** The latest plan of the project's publication, as the owner reviews it in the Studio. */
+export const publishPlanFile = (root: string): string =>
+  path.join(path.resolve(root), ".contrejour", "publish", "plan.json");
 export const contributionsDir = (root: string): string =>
   path.join(path.resolve(root), ".contrejour", "contributions");
 

@@ -32,10 +32,10 @@ const focusStyle = (data: { focused?: boolean; dimmed?: boolean }): string =>
     data.focused && "ring-2 ring-loop-600 ring-offset-2 ring-offset-canvas shadow-float",
   );
 
-/** The first lines of a step as plain words: no backticks, no inline JSON. */
+/** The first lines of a step as plain words: no backticks, no inline JSON (in a translation's full-width parentheses too). */
 export function plain(text: string): string {
   return text
-    .replace(/\s*\(`\{[^`]*\}`\)/g, "")
+    .replace(/\s*[(（]`\{[^`]*\}`[)）]/g, "")
     .replace(/`([^`]*)`/g, "$1")
     .replace(/\*\*([^*]+)\*\*/g, "$1")
     .replace(/\s+/g, " ")
