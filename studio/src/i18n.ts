@@ -74,7 +74,7 @@ const zh = {
   welcome_setup:
     "这个项目的 workflow 还没有设置。画布上是它的 setup 流程：问清你想让项目做什么，推荐合适的主任务流程和参数（也可以按你的话修改或新建），检查后交接。点「运行」开始，它每次需要你决定时都会在这里问你。",
   composer:
-    "和 Claude Code 说你想做什么：新建或修改流程、角色，运行，提问…；输入 @ 引用画布上的内容，/状态 查看运行状态…",
+    "和 Claude Code 说你想做什么：新建或修改流程、角色，运行，提问…；@ 引用画布上的内容，/clear、/compact 等命令照常可用，/状态 查看运行状态…",
   send: "发送",
   mention_button: "引用画布上的步骤、箭头或参数（也可以直接输入 @）",
   mention_empty: "画布上还没有流程，没有可以引用的内容。",
@@ -337,6 +337,8 @@ const zh = {
   nav_create: "创作区",
   nav_browse: "流程与角色",
   chat_session: "Claude Code 对话",
+  chat_cleared: "对话已清空（/clear）：会话从头开始，之前的内容不再带进去。",
+  chat_cleared_empty: "对话已清空。",
   panel_hide: "收起运行面板",
   panel_show: "展开运行面板",
   panel_runs: "运行",
@@ -439,7 +441,7 @@ const en: Record<TextKey, string> = {
   welcome_setup:
     "This project's workflow is not set up yet. Its setup loop is on the canvas: what you want the project to do, the task loop and parameters that fit (changed or built as you say), a check and the hand-off. Press Run to start it; it asks you here whenever it needs a decision.",
   composer:
-    "Tell Claude Code what you want: make or change a loop or a role, run one, ask…; type @ to point at the canvas, /status for how the loops stand…",
+    "Tell Claude Code what you want: make or change a loop or a role, run one, ask…; @ points at the canvas, commands such as /clear and /compact work…",
   send: "Send",
   mention_button: "Point at a step, arrow or parameter on the canvas (or type @)",
   mention_empty: "Nothing on the canvas to point at yet.",
@@ -654,7 +656,7 @@ const en: Record<TextKey, string> = {
   exec_waiting_for: "Waiting for your answer: {question}",
   status_button: "Run status",
   status_hint:
-    "How the project's loops stand now; you can also type /status. No running session is disturbed.",
+    "How the project's loops stand now; you can also type /状态. No running session is disturbed.",
   status_asking: "Looking at how the loops stand…",
   status_report: "Here is how the project's loops stand:",
   publish_review_open: "Review what leaves, entry by entry",
@@ -714,6 +716,9 @@ const en: Record<TextKey, string> = {
   nav_create: "Create",
   nav_browse: "Loops & roles",
   chat_session: "Claude Code conversation",
+  chat_cleared:
+    "Conversation cleared (/clear): the session starts afresh, without what came before.",
+  chat_cleared_empty: "Chat cleared.",
   panel_hide: "Hide the run panel",
   panel_show: "Show the run panel",
   panel_runs: "Runs",

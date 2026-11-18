@@ -29,6 +29,7 @@ import { isEffort, type Effort } from "../../src/tools/efforts.js";
 import { Inspector } from "./canvas/Inspector.js";
 import { FlowCanvas, focusedIds, pointablesOf } from "./canvas/FlowCanvas.js";
 import { ChatPanel, type ExecutionAction } from "./chat/ChatPanel.js";
+import { isClearCommand } from "./chat/commands.js";
 import { followSessions } from "./chat/live.js";
 import { LangContext, translate, useLang, type Lang, type TextKey } from "./i18n.js";
 import { ParamsDialog, RoleDraftDialog, RunDialog } from "./dialogs.js";
@@ -454,7 +455,33 @@ export function App() {
       return;
     }
     if (!text && !pointed.length) return;
+    if (isClearCommand(text)) return clear(text);
     await talk(text, pointed);
+  };
+  /**
+   * /clear (or /reset, /new): the session leaves its conversation for a fresh one,
+   * as in Claude Code, and the chat clears with it, going on with the fresh
+   * conversation; with no conversation yet, only the chat clears.
+   */
+  const clear = async (text: string) => {
+    if (conversation && status?.state !== "gone") {
+      setBusy(true);
+      try {
+        await api.answer(conversation, text, []);
+      } catch (reason) {
+        startFailed(reason);
+        return;
+      } finally {
+        setBusy(false);
+      }
+      setMessages([]);
+      handled.current = "";
+      pendingMessage.current = say({ from: "studio", key: "chat_cleared", session: conversation });
+      return;
+    }
+    leaveConversation();
+    setMessages([]);
+    say({ from: "studio", key: "chat_cleared_empty" });
   };
   /** The next message starts a conversation of its own, rather than continuing this one. */
   const leaveConversation = () => {

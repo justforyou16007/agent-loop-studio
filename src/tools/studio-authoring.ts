@@ -79,6 +79,24 @@ function readStore(root: string): Conversation[] {
     return [];
   }
 }
+/**
+ * The project's conversations, each naming the session as it is now: one whose
+ * session left for a fresh transcript (`/clear`) is recorded under the new id,
+ * so the chat reads, and a later message continues, what the session writes now.
+ */
+function currentStore(root: string, host: SessionHost): Conversation[] {
+  const conversations = readStore(root);
+  let moved = false;
+  for (const conversation of conversations) {
+    const now = host.get(conversation.id)?.sessionId;
+    if (now && now !== conversation.session.session_id) {
+      conversation.session.session_id = now;
+      moved = true;
+    }
+  }
+  if (moved) writeStore(root, conversations);
+  return conversations;
+}
 function writeStore(root: string, conversations: Conversation[]): void {
   fs.mkdirSync(path.dirname(storeFile(root)), { recursive: true });
   // Only the last few are kept: older ones are in Claude Code's own list of sessions.
@@ -101,6 +119,8 @@ const pointing = (pointers: Pointer[]): string =>
  * loop" or "this step" means. The session runs the loop the request is for.
  */
 export function chatMessage(text: string, pointers: Pointer[], base: Conversation["base"]): string {
+  // A slash command goes as typed: Claude Code runs it only when it is the whole message.
+  if (isSlashCommand(text)) return text.trim();
   const where = base?.source === "library" ? "from the library" : "of this project";
   const shown = base
     ? `\n\n[In the Studio: the loop \`${base.name}\` (${where}) is on the canvas]`
@@ -109,7 +129,10 @@ export function chatMessage(text: string, pointers: Pointer[], base: Conversatio
 }
 /** The owner's reply as the session receives it, and passes it to the loop: their words and what they pointed at. */
 export const ownerMessage = (text: string, pointers: Pointer[]): string =>
-  `${text}${pointing(pointers)}`.trim();
+  isSlashCommand(text) ? text.trim() : `${text}${pointing(pointers)}`.trim();
+/** A Claude Code slash command, such as `/compact` or `/clear`: a word after a slash, alone or with its arguments. */
+export const isSlashCommand = (text: string): boolean =>
+  /^\/[A-Za-z][\w:-]*(\s|$)/.test(text.trim());
 
 /**
  * The owner's conversation in the chat, started by their first message: a
@@ -254,7 +277,7 @@ export function conversationSessions(
   host: SessionHost,
 ): Map<string, { conversation: string; working: boolean }> {
   return new Map(
-    readStore(path.resolve(projectRoot)).map((conversation) => [
+    currentStore(path.resolve(projectRoot), host).map((conversation) => [
       conversation.session.session_id,
       { conversation: conversation.id, working: host.get(conversation.id)?.state === "running" },
     ]),
@@ -283,7 +306,7 @@ export async function answerConversation(
   },
 ): Promise<Conversation> {
   const root = path.resolve(projectRoot);
-  const conversations = readStore(root);
+  const conversations = currentStore(root, host);
   const conversation = conversations.find((entry) => entry.id === request.id);
   if (!conversation) throw new Error(`no conversation ${request.id}`);
   const message = ownerMessage(request.text, request.pointers);
@@ -368,8 +391,14 @@ export async function releaseSessions(projectRoot: string, host: SessionHost): P
 }
 
 /** The transcript of a conversation's session, by the conversation's id; undefined for no such conversation. */
-function transcriptOf(root: string, id: string): string | null | undefined {
-  const conversation = readStore(root).find((entry) => entry.id === id);
+function transcriptOf(
+  root: string,
+  host: SessionHost | null,
+  id: string,
+): string | null | undefined {
+  const conversation = (host ? currentStore(root, host) : readStore(root)).find(
+    (entry) => entry.id === id,
+  );
   return conversation ? transcriptPath(root, conversation.session.session_id) : undefined;
 }
 /** A conversation as the chat shows it, or one role of a loop it ran; null for no such conversation. */
@@ -380,7 +409,7 @@ export function conversationTimeline(
   role: { run: string; agent: string } | null = null,
 ): SessionTimeline | null {
   const root = path.resolve(projectRoot);
-  const transcript = transcriptOf(root, id);
+  const transcript = transcriptOf(root, host, id);
   if (transcript === undefined) return null;
   if (role) return roleTimeline(transcript, role.run, role.agent, root);
   const live = host.get(id);
@@ -400,7 +429,8 @@ export function conversationTool(
   role: { run: string; agent: string } | null = null,
 ): ToolDetail | null {
   const root = path.resolve(projectRoot);
-  const transcript = transcriptOf(root, id);
+  // The record already follows its session: the chat reads its timeline first.
+  const transcript = transcriptOf(root, null, id);
   if (!transcript) return null;
   const file =
     role && /^[A-Za-z0-9_-]+$/.test(role.run) && /^[A-Za-z0-9_-]+$/.test(role.agent)
@@ -421,7 +451,7 @@ export async function stopConversation(
   id: string,
 ): Promise<void> {
   const root = path.resolve(projectRoot);
-  const conversations = readStore(root);
+  const conversations = currentStore(root, host);
   const conversation = conversations.find((entry) => entry.id === id);
   if (!conversation) throw new Error(`no conversation ${id}`);
   // The turn and the loop it runs stop (an interrupt ends the session's background work too).
@@ -443,7 +473,7 @@ export async function conversationStatuses(
   lang: Lang | null = null,
 ): Promise<ConversationStatus[]> {
   const root = path.resolve(projectRoot);
-  const conversations = readStore(root).slice(-count);
+  const conversations = currentStore(root, host).slice(-count);
   const statuses: ConversationStatus[] = [];
   for (const conversation of conversations) {
     const live = host.get(conversation.id);
@@ -515,7 +545,7 @@ export async function resumeConversation(
   effort?: Effort | null,
 ): Promise<{ id: string; run: string }> {
   const root = path.resolve(projectRoot);
-  const conversations = readStore(root);
+  const conversations = currentStore(root, host);
   const conversation = conversations.find((entry) => entry.id === id);
   if (!conversation) throw new Error(`no conversation ${id}`);
   const status = (await conversationStatuses(root, host, conversations.length)).find(

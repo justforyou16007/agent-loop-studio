@@ -354,7 +354,9 @@ export type TimelineItem =
       level: "info" | "warning" | "error";
       text: string;
     }
-  | { kind: "turn-end"; id: string; turn: number; at: string; durationMs: number };
+  | { kind: "turn-end"; id: string; turn: number; at: string; durationMs: number }
+  /** What a slash command the owner typed printed (`/cost`, `/context`…), as Claude Code wrote it. */
+  | { kind: "output"; id: string; turn: number; at: string; text: string; error: boolean };
 export interface SessionTimeline {
   items: TimelineItem[];
   /** Claude Code's folder of transcripts, when this session's transcript is not in it. */

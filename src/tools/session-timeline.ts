@@ -204,11 +204,14 @@ function ownerWords(text: string): { text: string; pointers: string[] } {
   return { text: words.trim(), pointers };
 }
 /** Words in a user's turn that are Claude Code's own, not anybody's message. */
-const NOISE = [
-  /^No response requested\.?$/,
-  /<local-command-(stdout|stderr|caveat)>/,
-  /<command-(name|message|args)>/,
-];
+const NOISE = [/^No response requested\.?$/, /<local-command-caveat>/];
+/** A slash command the owner typed, as Claude Code records it: its name and arguments. */
+const COMMAND = /<command-name>([^<]*)<\/command-name>/;
+const COMMAND_ARGS = /<command-args>([^<]*)<\/command-args>/;
+/** What a slash command printed, on its output or its errors. */
+const COMMAND_OUTPUT = /<local-command-(stdout|stderr)>([\s\S]*?)<\/local-command-\1>/;
+/** Terminal colours in a command's output: the chat shows the words. */
+const COLOURS = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
 const INTERRUPTED = /^\[Request interrupted by user/;
 
 /** A loop's or a background agent's result, in a line, as its notification carries it. */
@@ -299,6 +302,31 @@ export function timelineOf(
   const said = (text: string, at: string, id: string, human = false) => {
     const words = text.trim();
     if (!words || NOISE.some((pattern) => pattern.test(words))) return;
+    // A slash command the owner typed is theirs; what it printed, a row of its own.
+    const command = COMMAND.exec(words);
+    if (command) {
+      asked = true;
+      turn += 1;
+      const typed = [command[1]!.trim(), (COMMAND_ARGS.exec(words)?.[1] ?? "").trim()]
+        .filter(Boolean)
+        .join(" ");
+      items.push({ kind: "owner", id, turn, at, text: typed, pointers: [] });
+      return;
+    }
+    const printed = COMMAND_OUTPUT.exec(words);
+    if (printed) {
+      const output = printed[2]!.replace(COLOURS, "").trim();
+      if (output)
+        items.push({
+          kind: "output",
+          id,
+          turn,
+          at,
+          text: cut(output, TEXT_LIMIT),
+          error: printed[1] === "stderr",
+        });
+      return;
+    }
     if (INTERRUPTED.test(words)) {
       items.push({ kind: "notice", id, turn, at, level: "warning", text: "interrupted" });
       return;

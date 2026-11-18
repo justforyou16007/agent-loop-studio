@@ -375,6 +375,18 @@ function ItemRow({
         }
       />
     );
+  // What a slash command the owner typed printed, as it printed it.
+  if (item.kind === "output")
+    return (
+      <pre
+        className={cx(
+          "scroll-thin max-h-[360px] overflow-auto rounded-lg px-3 py-2 font-mono text-[11.5px] leading-5 whitespace-pre-wrap",
+          item.error ? "bg-bad-50 text-bad-600" : "bg-canvas text-ink-2",
+        )}
+      >
+        {item.text}
+      </pre>
+    );
   if (item.kind === "turn-end")
     return (
       <div className="flex items-center gap-2 px-1.5 pb-1 text-[11px] text-ink-4">

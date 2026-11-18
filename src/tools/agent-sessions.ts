@@ -268,6 +268,12 @@ export class SessionHost {
       return true;
     }
     live.steps += 1;
+    // /clear (and a few other flows) leave the conversation for a fresh one, its transcript under a new id.
+    if ((message as { type: string }).type === "conversation_reset") {
+      const reset = message as unknown as { new_conversation_id?: string };
+      if (reset.new_conversation_id) live.sessionId = reset.new_conversation_id;
+      return true;
+    }
     if (message.type === "system") {
       if (message.subtype === "init") live.sessionId = message.session_id;
       else if (message.subtype === "session_state_changed")

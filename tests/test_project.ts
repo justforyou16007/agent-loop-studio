@@ -13,7 +13,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { isStatusCommand } from "../studio/src/chat/commands.js";
+import { isClearCommand, isStatusCommand } from "../studio/src/chat/commands.js";
 import { memoryByRole, plannedTicks, selectionChange } from "../studio/src/publish-review.js";
 import { nameProblem, suggestedName } from "../studio/src/project-name.js";
 import { openingOf } from "../studio/src/opening.js";
@@ -741,10 +741,10 @@ try {
     assert.deepEqual([shown.record_missing, shown.streaming], [null, ""]);
     assert.deepEqual(
       shown.items.map((item: { kind: string; tool?: string; status?: string }) => [item.kind, item.tool ?? item.status ?? ""].filter(Boolean).join(":")),
-      ["prompt", "thinking", "tool:shell", "tool:edit", "tool:workflow", "notice", "text", "turn-end", "owner", "notice"],
-      "the bookkeeping, the local command's noise and the tool results' own rows are left out",
+      ["prompt", "thinking", "tool:shell", "tool:edit", "tool:workflow", "notice", "text", "turn-end", "output", "owner", "notice"],
+      "the bookkeeping and the tool results' own rows are left out; what a local command printed is a row",
     );
-    const [prompt, , bash, edit, loopRow, retry, text, turnEnd, owner, failure] = shown.items;
+    const [prompt, , bash, edit, loopRow, retry, text, turnEnd, printed, owner, failure] = shown.items;
     assert.deepEqual([prompt.loop, JSON.parse(prompt.args)], ["setup", { answers: {} }]);
     assert.deepEqual([bash.title, bash.summary, bash.status], ["", "ls .claude/loops", "done"]);
     assert.deepEqual([edit.summary, edit.status], ["task.md", "done"], "a path inside the project, from the project's folder");
@@ -753,6 +753,7 @@ try {
     assert.deepEqual([retry.level, retry.text], ["warning", "Request timed out. (retry 2/10)"], "retries are one notice that follows them");
     assert.equal(text.text, "The setup loop waits for your decision.");
     assert.equal(turnEnd.durationMs, 125000);
+    assert.deepEqual([printed.text, printed.error], ["noise", false], "what a local command printed");
     assert.deepEqual([owner.text, owner.pointers], ["Make it shorter", ["Step 2 · Task loop"]]);
     assert.deepEqual([failure.level, failure.text], ["error", "API Error: 400 reasoning effort"]);
     // A tool call in full, read when the owner opens it.
@@ -796,8 +797,10 @@ try {
     fs.mkdirSync(plainRun, { recursive: true });
     fs.writeFileSync(path.join(plainRun, "journal.jsonl"), `${JSON.stringify({ type: "started", key: "k1", agentId: "b1", label: "goal", phase: "Goal" })}\n`);
     fs.writeFileSync(path.join(plainRun, "agent-b1.meta.json"), JSON.stringify({ agentType: "project-setup" }));
-    // The chat asks the Studio how the loops stand, never a session, when the owner types the command alone.
-    assert.deepEqual(["/status", " /STATUS ", "/状态", "/运行状态", "status", "/status please", "把状态检查去掉"].map(isStatusCommand), [true, true, true, true, false, false, false]);
+    // The chat asks the Studio how the loops stand, never a session, when the owner types the command alone; Claude
+    // Code's own commands, its /status among them, go to the session, and /clear clears the chat with it.
+    assert.deepEqual(["/状态", " /运行状态 ", "/status", "状态", "/状态 一下"].map(isStatusCommand), [true, true, false, false, false]);
+    assert.deepEqual(["/clear", " /reset", "/NEW", "/clear now", "/compact"].map(isClearCommand), [true, true, true, false, false]);
     // Publishing is reviewed on a page of its own: the plan the publish loop's review is about, every memory entry
     // ticked as it leaves; what the owner unticks is left out, what they tick again goes back.
     assert.deepEqual(JSON.parse((await request(at("api/publish/plan"), { cookie })).body), { plan: null });
@@ -849,6 +852,28 @@ try {
     fs.writeFileSync(chatTranscript, `${JSON.stringify({ type: "user", uuid: "h1", timestamp: new Date().toISOString(), origin: { kind: "human" }, message: { role: "user", content: chatWords } })}\n`);
     const chatRows = (await timelineOf(`id=${chatId}`)).items;
     assert.deepEqual([chatRows[0].kind, chatRows[0].text, chatRows[0].pointers], ["owner", "Make a role that sums up experiment logs", ["Step 2 · Build"]]);
+    // A slash command goes as typed, whatever is pointed at; the chat shows it as the owner's, and what it printed.
+    chat.say({ type: "system", subtype: "session_state_changed", state: "idle" });
+    await until("the chat's session waits", async () => (await statusOf(chatId)).state !== "running");
+    assert.equal((await answer(chatId, "/compact keep the plan", [{ kind: "node", id: "s2", label: "Step 2 · Build" }])).status, 200);
+    await until("the command reaches the session", () => chat.sent.length === 2);
+    assert.equal(chat.sent[1]!.message.content, "/compact keep the plan");
+    fs.appendFileSync(
+      chatTranscript,
+      [
+        { type: "user", uuid: "h2", timestamp: new Date().toISOString(), message: { role: "user", content: "<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args>keep the plan</command-args>" } },
+        { type: "user", uuid: "h3", timestamp: new Date().toISOString(), message: { role: "user", content: `<local-command-stdout>${String.fromCharCode(27)}[2mCompacted.${String.fromCharCode(27)}[22m</local-command-stdout>` } },
+      ].map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+    );
+    const commandRows = (await timelineOf(`id=${chatId}`)).items.slice(1).map((item: { kind: string; text: string }) => [item.kind, item.text]);
+    assert.deepEqual(commandRows, [["owner", "/compact keep the plan"], ["output", "Compacted."]]);
+    // /clear leaves the conversation for a fresh one under a new id: the record follows it, and the chat reads the fresh transcript.
+    chat.say({ type: "conversation_reset", new_conversation_id: "fresh-chat", uuid: "r1", session_id: "old" });
+    await until("the record follows the fresh conversation", async () => {
+      await statusOf(chatId);
+      return read(path.join(first, ".contrejour/studio/conversations.json")).conversations.find((entry: { id: string }) => entry.id === chatId).session.session_id === "fresh-chat";
+    });
+    assert.deepEqual((await timelineOf(`id=${chatId}`)).items, [], "the fresh conversation, nothing in it yet");
     // Stopping a conversation no session runs asks nothing of anything; one the project does not have is an error.
     assert.equal((await request(at("api/authoring/stop"), { cookie, method: "POST", body: { id: "c9" } })).status, 200);
     assert.equal((await request(at("api/authoring/stop"), { cookie, method: "POST", body: { id: "nope" } })).status, 500);
@@ -867,6 +892,7 @@ try {
   };
   assert.equal(chatMessage("Add a review", [], { name: "x", source: "library" }), "Add a review\n\n[In the Studio: the loop `x` (from the library) is on the canvas]");
   assert.equal(chatMessage("What does it do?", [], null), "What does it do?");
+  assert.equal(chatMessage("/clear", [{ kind: "node", id: "s1", label: "Step 1" }], { name: "x", source: "project" }), "/clear", "a command goes as typed");
 
   // --- the hooks: a trajectory recorded, an answer that is not the owner's refused ---
   const first = path.join(workspace, "first");

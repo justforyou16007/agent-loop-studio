@@ -113,7 +113,8 @@ export function foldTurns(rows: Row[], openTurn: number | null): Row[] {
         (row.item.kind === "prompt" ||
           row.item.kind === "owner" ||
           row.item.kind === "turn-end" ||
-          row.item.kind === "notice"));
+          row.item.kind === "notice" ||
+          row.item.kind === "output"));
     let last = -1;
     inTurn.forEach((row, at) => {
       if (row.type === "item" && row.item.kind === "text") last = at;
