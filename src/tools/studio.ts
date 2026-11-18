@@ -27,9 +27,13 @@ import {
   publishPlanFile,
 } from "./installation.js";
 import { projectOutputs } from "./outputs.js";
+import { loopRuns } from "./runs.js";
+import { EFFORTS, isEffort, type Effort } from "./efforts.js";
 import {
+  roleBody,
   TRANSLATED,
   translateFlow,
+  translateRole,
   translateSummary,
   type Lang,
   type Strings,
@@ -52,10 +56,11 @@ import {
   hasConversation,
   releaseSessions,
   resumeConversation,
+  setConversationEffort,
   stopConversation,
   runLoop,
-  startConversation,
-  type AuthoringLoop,
+  startChat,
+  conversationSessions,
   type Pointer,
   trialLoop,
 } from "./studio-authoring.js";
@@ -330,8 +335,31 @@ export async function serveStudio(
           before: url.searchParams.get("before") || undefined,
           kind: kind === "role" || kind === "loop" ? kind : undefined,
           name: url.searchParams.get("name") || undefined,
+          loop: url.searchParams.get("loop") || undefined,
           limit: Number.isInteger(limit) && limit > 0 ? Math.min(limit, 500) : 100,
         }),
+        head,
+      );
+    }
+    // A loop's runs, newest first: how each stands, and what each of its roles did and gave.
+    if (url.pathname === "/api/runs") {
+      if (request.method !== "GET" && request.method !== "HEAD")
+        return json(response, 405, { error: "GET only" }, head);
+      const sessions = conversationSessions(root, agents);
+      const limit = Number(url.searchParams.get("limit"));
+      return json(
+        response,
+        200,
+        {
+          runs: loopRuns(
+            root,
+            {
+              loop: url.searchParams.get("loop") || undefined,
+              limit: Number.isInteger(limit) && limit > 0 ? Math.min(limit, 100) : 30,
+            },
+            (session) => sessions.get(session) ?? null,
+          ),
+        },
         head,
       );
     }
@@ -362,8 +390,10 @@ export async function serveStudio(
       if (request.method !== "POST") return json(response, 405, { error: "POST only" });
       const body = await readBody(request);
       if (typeof body.id !== "string") return json(response, 400, { error: "which conversation" });
+      const asked = effortAsked(body);
+      if ("error" in asked) return json(response, 400, asked);
       try {
-        return json(response, 200, await resumeConversation(root, agents, body.id));
+        return json(response, 200, await resumeConversation(root, agents, body.id, asked.effort));
       } catch (error) {
         return json(response, 409, { error: (error as Error).message });
       }
@@ -380,7 +410,9 @@ export async function serveStudio(
         return json(response, 409, {
           error: "this project has no loop-trial loop: update its installation",
         });
-      const conversation = await trialLoop(root, agents, name, goal);
+      const asked = effortAsked(body);
+      if ("error" in asked) return json(response, 400, asked);
+      const conversation = await trialLoop(root, agents, name, goal, asked.effort ?? null);
       return json(response, 200, { id: conversation.id });
     }
     if (url.pathname === "/api/use" || url.pathname === "/api/run") {
@@ -400,7 +432,9 @@ export async function serveStudio(
       }
       if (!(await view()).loops.some((loop) => loop.name === name && loop.source === "project"))
         return json(response, 404, { error: `this project has no loop ${name}` });
-      const conversation = await runLoop(root, agents, name);
+      const asked = effortAsked(body);
+      if ("error" in asked) return json(response, 400, asked);
+      const conversation = await runLoop(root, agents, name, asked.effort ?? null);
       return json(response, 200, { id: conversation.id });
     }
     const data = await view();
@@ -435,7 +469,7 @@ export async function serveStudio(
             source: role.source,
             framework: role.framework,
             side: role.side,
-            description: role.description,
+            description: translateRole(role, translationOf(role)).description,
           })),
           generated_at: data.project.generated_at,
           lang: lang ?? "en",
@@ -468,7 +502,20 @@ export async function serveStudio(
       case "/api/role": {
         const role = data.roles.find((entry) => entry.name === name);
         if (!role) return json(response, 404, { error: `no role ${name}` }, head);
-        const detail: RoleDetail = { ...role };
+        // In the page's language: each section the translation has, the rest as written.
+        const shown = translateRole(role, translationOf(role));
+        const detail: RoleDetail = {
+          name: role.name,
+          source: role.source,
+          framework: role.framework,
+          side: role.side,
+          description: shown.description,
+          tools: role.tools,
+          effort: role.effort,
+          body: roleBody(shown.sections),
+          used_by: role.used_by,
+          lang: lang ?? "en",
+        };
         return json(response, 200, detail, head);
       }
       case "/api/search": {
@@ -697,9 +744,24 @@ export async function serveStudio(
     const body = await readBody(request);
     const text = typeof body.text === "string" ? body.text.trim() : "";
     const pointers = pointersOf(body.references);
+    const asked = effortAsked(body);
+    if ("error" in asked) return json(response, 400, asked);
+    const { effort } = asked;
+    // The level a conversation's session runs at, changed while it runs: from its next request on.
+    if (url.pathname === "/api/authoring/effort") {
+      if (typeof body.id !== "string") return json(response, 400, { error: "which conversation" });
+      if (effort === undefined)
+        return json(response, 400, { error: "which effort: one of the levels, or null" });
+      if (!hasConversation(root, body.id))
+        return json(response, 404, { error: `no conversation ${body.id}` });
+      try {
+        return json(response, 200, await setConversationEffort(root, agents, body.id, effort));
+      } catch (error) {
+        return json(response, 409, { error: (error as Error).message });
+      }
+    }
+    // The owner's conversation: their words go to a session as the entry role, which runs the loop they are for.
     if (url.pathname === "/api/authoring") {
-      const loop: AuthoringLoop =
-        body.loop === "role-authoring" ? "role-authoring" : "loop-authoring";
       const base =
         isRecord(body.base) &&
         typeof body.base.name === "string" &&
@@ -707,11 +769,11 @@ export async function serveStudio(
           ? { name: body.base.name, source: body.base.source }
           : null;
       if (!text) return json(response, 400, { error: "say what you want" });
-      const conversation = await startConversation(root, agents, {
-        loop,
-        base,
+      const conversation = await startChat(root, agents, {
         text,
         pointers,
+        base,
+        effort: effort ?? null,
       });
       return json(response, 200, { id: conversation.id });
     }
@@ -729,6 +791,7 @@ export async function serveStudio(
         id: body.id,
         text,
         pointers,
+        effort,
       });
       return json(response, 200, { id: conversation.id });
     }
@@ -866,6 +929,18 @@ export async function serveStudio(
       });
     },
   };
+}
+
+/**
+ * The reasoning effort a request asks a session to run at: undefined when it
+ * names none, null for Claude Code's own, or why it is not one.
+ */
+function effortAsked(
+  body: Record<string, unknown>,
+): { effort: Effort | null | undefined } | { error: string } {
+  if (body.effort === undefined) return { effort: undefined };
+  if (body.effort === null || isEffort(body.effort)) return { effort: body.effort };
+  return { error: `effort is one of ${EFFORTS.join(", ")}, or null for Claude Code's own` };
 }
 
 /** The framework's checkout this Studio runs from: the folder with its project.json and installer, above dist/. */

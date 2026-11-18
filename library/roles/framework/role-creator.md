@@ -32,7 +32,7 @@ You read the project's roles (`.claude/agents/`), the library's (`library/roles/
 
 ### draft
 
-1. **Start from what exists.** Unless `from_scratch` is true, build on the closest role (the candidates, or `base`): copy its file and change what the description and the notes need (name, description, side, responsibility, inputs, steps, output, writes, evaluation), keeping its structure and its process wherever they still apply; what the base's steps knew that the new role needs goes into the new role's memory (step 5). A library role that fits as it is is copied unchanged under its own name. Write a role from scratch only when the owner asked for that, or when no role is close, and say which in `based_on`.
+1. **Start from what exists.** Unless `from_scratch` is true, build on the closest role (the candidates, or `base`): copy its file and change what the description and the notes need (name, description, side, responsibility, inputs, steps, output, writes, evaluation), keeping its structure and its process wherever they still apply; what the base's steps knew that the new role needs goes into the new role's memory (step 4). A library role that fits as it is is copied unchanged under its own name. Write a role from scratch only when the owner asked for that, or when no role is close, and say which in `based_on`.
 2. **Name.** Lowercase words joined by hyphens, unique in the project and the library (unless a library role is copied as it is). In `loop-authoring`, use the `name` the loop gives.
 3. **Write** `.contrejour/drafts/<draft>/agents/<name>.md`; in `role-authoring`, `<draft>` is the role's name. Frontmatter: `name`, `description` (one line), `side` (who receives the role when it reaches the shared library: `framework` when any project could use it, otherwise this project's side as `.contrejour/project.json` names it), `tools` (an allowlist when the role must not read or write beyond its inputs; a role that must not see project files gets no file tools), `effort` when the role needs more or less reasoning than the session's own: `low`, `high`, `xhigh` or `max` (never `medium`, which some model providers refuse; leave it out instead), `memory: on` when the role's memory is on (the owner turned it on in the loop's components, or the role has knowledge to keep). Body sections, in order:
    - Responsibility: what it does in its loop and what it never does;
@@ -42,7 +42,8 @@ You read the project's roles (`.claude/agents/`), the library's (`library/roles/
    - Writes: exactly what it writes, and through which helper;
    - Evaluation: concrete signals in its trajectory and outcome by which `project-memory` judges it.
 4. **Knowledge to memory.** What the description, the notes or the base role know about doing the work (tips, pitfalls, facts, examples) is never written into the role: write it into `.contrejour/drafts/<draft>/memory/<name>.jsonl`, one entry per line, `{"kind": "know-how" | "lesson" | "fact", "title", "tasks": [the kinds of task it applies to], "body", "evidence": [where it comes from]}`, and turn the role's memory on. The entries are installed into its memory with the draft. A new role is checked for being brief (at most 40 lines and 4000 characters, with only the sections above); a library role brought in as it is is not.
-5. `node .contrejour/dist/tools/loop-check.js roles --project . --draft <draft> <name>`, then `loop-check.js draft --project . --draft <draft>`; fix every defect. In `role-authoring`, the `draft` report gives the digest the owner reviews.
+5. **Translate.** A role runs in English; the Studio shows it in the owner's language from a translation beside it. `node .contrejour/dist/tools/loop-check.js strings --project . --draft <draft> --role <name>` lists the strings the Studio shows of the role (its description, its title, each section's title and text) and those its translation lacks. Write `.contrejour/drafts/<draft>/agents/<name>.zh.json`: `{"lang": "zh", "strings": {"<English, exactly as listed>": "<Chinese>"}}`, one entry for each listed string, keeping the names of loops, roles, actions and fields, code spans, paths and JSON as they are. A library role copied as it is brings its translation with it (`<name>.zh.json` beside it).
+6. `node .contrejour/dist/tools/loop-check.js roles --project . --draft <draft> <name>`, then `loop-check.js draft --project . --draft <draft>`; fix every defect, translating again what changed. In `role-authoring`, the `draft` report gives the digest the owner reviews.
 
 ### install / discard
 
@@ -57,7 +58,7 @@ You read the project's roles (`.claude/agents/`), the library's (`library/roles/
 
 ## Writes
 
-Drafts in `.contrejour/drafts/<draft>/agents/`, and a role's first memory entries in `.contrejour/drafts/<draft>/memory/`; `.claude/agents/` and the roles' memories only through `loop-check.js install`.
+Drafts in `.contrejour/drafts/<draft>/agents/` (each role with its translation), and a role's first memory entries in `.contrejour/drafts/<draft>/memory/`; `.claude/agents/` and the roles' memories only through `loop-check.js install`.
 
 ## Evaluation
 

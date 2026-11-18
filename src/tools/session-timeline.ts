@@ -191,13 +191,17 @@ function promptOf(text: string): { loop: string | null; args: string } {
 }
 /** The owner's words and what they pointed at on the canvas, as the Studio sends a reply. */
 function ownerWords(text: string): { text: string; pointers: string[] } {
-  const pointed = /\n*\[On the canvas: ([^\]]*)\]\s*$/.exec(text);
-  return pointed
-    ? {
-        text: text.slice(0, pointed.index).trim(),
-        pointers: pointed[1]!.split("; ").filter(Boolean),
-      }
-    : { text: text.trim(), pointers: [] };
+  let words = text;
+  const pointers: string[] = [];
+  const pointed = /\n*\[On the canvas: ([^\]]*)\]\s*$/.exec(words);
+  if (pointed) {
+    words = words.slice(0, pointed.index);
+    pointers.push(...pointed[1]!.split("; ").filter(Boolean));
+  }
+  // What the Studio showed them when they started the conversation: for the session, not shown again.
+  const shown = /\n*\[In the Studio: [^\]]*\]\s*$/.exec(words);
+  if (shown) words = words.slice(0, shown.index);
+  return { text: words.trim(), pointers };
 }
 /** Words in a user's turn that are Claude Code's own, not anybody's message. */
 const NOISE = [
@@ -291,7 +295,8 @@ export function timelineOf(
   let asked = false;
   let retrying: Extract<TimelineItem, { kind: "notice" }> | null = null;
   let workflows = 0;
-  const said = (text: string, at: string, id: string) => {
+  // The first message is the Studio's prompt, unless the owner typed it: a conversation they started in the chat.
+  const said = (text: string, at: string, id: string, human = false) => {
     const words = text.trim();
     if (!words || NOISE.some((pattern) => pattern.test(words))) return;
     if (INTERRUPTED.test(words)) {
@@ -300,7 +305,7 @@ export function timelineOf(
     }
     turn += 1;
     retrying = null;
-    if (!asked) {
+    if (!asked && !human) {
       asked = true;
       items.push({
         kind: "prompt",
@@ -310,7 +315,10 @@ export function timelineOf(
         text: cut(words, TEXT_LIMIT),
         ...promptOf(words),
       });
-    } else items.push({ kind: "owner", id, turn, at, ...ownerWords(cut(words, TEXT_LIMIT)) });
+    } else {
+      asked = true;
+      items.push({ kind: "owner", id, turn, at, ...ownerWords(cut(words, TEXT_LIMIT)) });
+    }
   };
   for (const [index, entry] of entries.entries()) {
     const at = stringOf(entry.timestamp);
@@ -342,13 +350,13 @@ export function timelineOf(
         continue;
       }
       if (typeof content === "string") {
-        said(content, at, id);
+        said(content, at, id, origin.kind === "human");
         continue;
       }
       if (!Array.isArray(content)) continue;
       for (const part of content) {
         if (!isRecord(part)) continue;
-        if (part.type === "text") said(stringOf(part.text), at, id);
+        if (part.type === "text") said(stringOf(part.text), at, id, origin.kind === "human");
         if (part.type !== "tool_result") continue;
         const tool = tools.get(stringOf(part.tool_use_id));
         if (!tool) continue;

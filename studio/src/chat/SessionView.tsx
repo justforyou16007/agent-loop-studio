@@ -22,6 +22,7 @@ import type {
 } from "../../../src/tools/studio-types.js";
 import { api } from "../api.js";
 import { useLang } from "../i18n.js";
+import { usePhaseTitle } from "../phases.js";
 import { Markdown } from "../Markdown.js";
 import type { Focus, Names } from "../types.js";
 import { Button, cx } from "../ui.js";
@@ -63,6 +64,7 @@ export function SessionView({
   pending,
   onReply,
   onReview,
+  onResume,
   onStop,
   onNewConversation,
   onViewFiles,
@@ -79,6 +81,8 @@ export function SessionView({
   onReply?: (text: string) => void;
   /** Open the page of the review it waits at, for a review that has one (publishing, entry by entry). */
   onReview?: (reviewId: string) => void;
+  /** Resume its loop run where it stopped. */
+  onResume?: () => void;
   onStop?: () => Promise<void>;
   onNewConversation?: () => void;
   onViewFiles: (files: { name: string; text: string; original: string | null }[]) => void;
@@ -212,6 +216,7 @@ export function SessionView({
         startedAt={startedAt}
         onReply={onReply}
         onReview={onReview}
+        onResume={onResume}
         onStop={onStop}
         onNewConversation={onNewConversation}
         onViewFiles={onViewFiles}
@@ -430,6 +435,7 @@ function LoopCard({
   onFocus: (focus: Focus) => void;
 }) {
   const { t } = useLang();
+  const titleOf = usePhaseTitle();
   const running = item.status === "running" && !stopped;
   const [open, setOpen] = useState(running);
   useEffect(() => {
@@ -496,7 +502,7 @@ function LoopCard({
                 <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center">
                   <RoleStatus done={entry.done} stopped={stopped && !entry.done} />
                 </span>
-                <span className="shrink-0 text-ink-3">{entry.phase}</span>
+                <span className="shrink-0 text-ink-3">{titleOf(entry.phase)}</span>
                 <span className="truncate rounded-md bg-brand-50 px-1.5 font-mono text-[11px] leading-5 text-brand-700">
                   {entry.role || entry.label}
                 </span>
@@ -621,6 +627,7 @@ function Footer({
   startedAt,
   onReply,
   onReview,
+  onResume,
   onStop,
   onNewConversation,
   onViewFiles,
@@ -630,6 +637,8 @@ function Footer({
   startedAt: string;
   onReply?: (text: string) => void;
   onReview?: (reviewId: string) => void;
+  /** Resume its loop run where it stopped. */
+  onResume?: () => void;
   onStop?: () => Promise<void>;
   onNewConversation?: () => void;
   onViewFiles: (files: { name: string; text: string; original: string | null }[]) => void;
@@ -756,7 +765,14 @@ function Footer({
   return (
     <div className="space-y-1">
       <Notice level="info" text={t("session_stopped")} />
-      <div className="px-1.5 text-[11.5px]">{startNew}</div>
+      <div className="flex flex-wrap items-center gap-2 px-1.5 text-[11.5px]">
+        {status.resumable && onResume && (
+          <Button size="sm" variant="primary" title={t("exec_resume_hint")} onClick={onResume}>
+            <Play size={12} /> {t("session_resume_run")}
+          </Button>
+        )}
+        {startNew}
+      </div>
     </div>
   );
 }

@@ -8,7 +8,8 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { transcriptsDir } from "./session-record.js";
+import { loopCalls, transcriptsDir, type LoopCall } from "./session-record.js";
+import { transcriptEntries } from "./session-timeline.js";
 import type { OutputItem, OutputList } from "./studio-types.js";
 import { isRecord } from "./validate.js";
 
@@ -17,6 +18,8 @@ export interface OutputQuery {
   before?: string;
   kind?: "role" | "loop";
   name?: string;
+  /** Only what this loop's runs gave: its results, and its roles' outputs in them. */
+  loop?: string;
   limit?: number;
 }
 
@@ -40,78 +43,32 @@ const lines = (file: string): Record<string, unknown>[] => {
     return [];
   }
 };
-const textOf = (content: unknown): string =>
-  typeof content === "string"
-    ? content
-    : Array.isArray(content)
-      ? content
-          .map((part) => (isRecord(part) && typeof part.text === "string" ? part.text : ""))
-          .join("")
-      : "";
-/** A JSON value in a notification's result: the whole text, or the object in it; else the text. */
-function valueIn(text: string): unknown {
-  const trimmed = text.trim();
-  for (const candidate of [
-    trimmed,
-    trimmed.slice(trimmed.indexOf("{"), trimmed.lastIndexOf("}") + 1),
-  ]) {
-    if (!candidate) continue;
-    try {
-      return JSON.parse(candidate);
-    } catch {
-      // Try the next reading.
-    }
-  }
-  return trimmed;
-}
-
-/** The loops a session ran, with what each ended with: its Workflow calls, matched to their notifications. */
-function loopOutputs(session: string, transcript: string): OutputItem[] {
-  const calls = new Map<string, { name: string; run: string | null }>();
-  const items: OutputItem[] = [];
-  for (const entry of lines(transcript)) {
-    const message = isRecord(entry.message) ? entry.message : {};
-    const content = Array.isArray(message.content) ? message.content : [];
-    if (entry.type === "assistant")
-      for (const part of content)
-        if (isRecord(part) && part.type === "tool_use" && part.name === "Workflow") {
-          const input = isRecord(part.input) ? part.input : {};
-          calls.set(String(part.id), {
-            name: typeof input.name === "string" ? input.name : "a loop",
-            run: null,
-          });
-        }
-    if (entry.type !== "user") continue;
-    for (const part of content)
-      if (isRecord(part) && part.type === "tool_result" && calls.has(String(part.tool_use_id))) {
-        const result = isRecord(entry.toolUseResult) ? entry.toolUseResult : {};
-        const run =
-          typeof result.runId === "string"
-            ? result.runId
-            : (/\bwf_[A-Za-z0-9_-]+/.exec(textOf(part.content))?.[0] ?? null);
-        calls.get(String(part.tool_use_id))!.run = run;
-      }
-    const origin = isRecord(entry.origin) ? entry.origin : {};
-    if (origin.kind !== "task-notification") continue;
-    const text = textOf(message.content);
-    const result = /<result>([\s\S]*?)<\/result>/.exec(text)?.[1];
-    const call = calls.get(/<tool-use-id>([^<]+)<\/tool-use-id>/.exec(text)?.[1] ?? "");
-    if (result === undefined || !call) continue;
-    items.push({
-      at: typeof entry.timestamp === "string" ? entry.timestamp : "",
-      kind: "loop",
-      name: call.name,
-      session,
-      run: call.run,
-      step: "",
-      output: valueIn(result),
-    });
-  }
-  return items;
+/** The loops a session ran, with what each ended with. */
+function loopOutputs(session: string, calls: LoopCall[]): OutputItem[] {
+  return calls.flatMap((call) =>
+    call.ended && call.ended.result !== null
+      ? [
+          {
+            at: call.ended.at,
+            kind: "loop" as const,
+            name: call.loop || "a loop",
+            loop: call.loop || null,
+            session,
+            run: call.run,
+            step: "",
+            output: call.ended.result,
+          },
+        ]
+      : [],
+  );
 }
 
 /** The roles of a session's loop runs that finished, each with its whole return value. */
-function roleOutputs(session: string, transcript: string): OutputItem[] {
+function roleOutputs(
+  session: string,
+  transcript: string,
+  loopOf: Map<string, string>,
+): OutputItem[] {
   const runs = path.join(transcript.replace(/\.jsonl$/, ""), "subagents", "workflows");
   if (!fs.existsSync(runs)) return [];
   const items: OutputItem[] = [];
@@ -148,6 +105,7 @@ function roleOutputs(session: string, transcript: string): OutputItem[] {
         at,
         kind: "role",
         name: role || "a role",
+        loop: loopOf.get(run) ?? null,
         session,
         run,
         step: step ? [step.phase, step.label].filter(Boolean).join(" · ") : "",
@@ -169,15 +127,19 @@ export function projectOutputs(root: string, query: OutputQuery = {}): OutputLis
     .map((entry) => ({ ...entry, changed: fs.statSync(entry.file).mtimeMs }))
     .sort((a, b) => b.changed - a.changed)
     .slice(0, SESSIONS_READ);
-  const all = sessions.flatMap(({ file, session }) => [
-    ...roleOutputs(session, file),
-    ...loopOutputs(session, file),
-  ]);
+  const all = sessions.flatMap(({ file, session }) => {
+    const calls = loopCalls(transcriptEntries(file));
+    const loopOf = new Map(
+      calls.flatMap((call) => (call.run ? ([[call.run, call.loop]] as [string, string][]) : [])),
+    );
+    return [...roleOutputs(session, file, loopOf), ...loopOutputs(session, calls)];
+  });
   const before = query.before ? Date.parse(query.before) : NaN;
   const items = all
     .filter((item) => Number.isNaN(before) || (Date.parse(item.at) || 0) <= before)
     .filter((item) => !query.kind || item.kind === query.kind)
     .filter((item) => !query.name || item.name === query.name)
+    .filter((item) => !query.loop || item.loop === query.loop)
     .sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
     .slice(0, query.limit ?? 100);
   const names = (kind: OutputItem["kind"]) =>

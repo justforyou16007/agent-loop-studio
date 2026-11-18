@@ -18,7 +18,7 @@ import type { Flow, FlowNode } from "../../../src/tools/studio-types.js";
 import { useLang } from "../i18n.js";
 import type { Focus, Pointable, Reference } from "../types.js";
 import { aside, layoutFlow, paramId, type Size } from "./layout.js";
-import { nodeTypes, type ParamData, type StepData } from "./nodes.js";
+import { nodeTypes, type ParamData, type StepActivity, type StepData } from "./nodes.js";
 
 const GRAY = "#98a2b3";
 const BRAND = "#3b6ff5";
@@ -89,7 +89,7 @@ export function focusedIds(flow: Flow, focus: Focus): Set<string> {
         ? node.roles.includes(focus.name) ||
           node.items.some((item) => item.roles.includes(focus.name))
         : focus.kind === "step"
-          ? node.title === focus.name
+          ? node.title === focus.name || node.phase === focus.name
           : node.loops.includes(focus.name) ||
             (focus.name === flow.loop.name && node.kind === "step");
     if (lit) ids.add(node.id);
@@ -106,7 +106,8 @@ interface CanvasProps {
   onReference?: (reference: Reference) => void;
   onSelect?: (id: string | null) => void;
   /** Steps of the loop running now, by title: going on, or done. */
-  activity?: Map<string, "running" | "done">;
+  /** How each step stands in the run shown, by its phase. */
+  activity?: Map<string, StepActivity>;
   /** What the chat points out: these boxes and arrows stay lit, the rest is greyed. */
   focus?: Set<string> | null;
   onClearFocus?: () => void;
@@ -219,9 +220,7 @@ function Canvas({
           referenced: referenced?.has(node.id) ?? false,
           selected: selected === node.id,
           activity:
-            node.type === "step"
-              ? activity?.get(String((node.data as StepData).node.title))
-              : undefined,
+            node.type === "step" ? activity?.get((node.data as StepData).node.phase) : undefined,
           focused: Boolean(focus?.has(node.id)),
           dimmed: !lit(node.id),
         },

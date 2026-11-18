@@ -72,11 +72,50 @@ export function flowStrings(flow: Flow): string[] {
   return out;
 }
 
+/** A string in the language of the translation, where it has one; as it is otherwise. */
+const shown = (translation: Strings) => (text: string) => translation[text.trim()] ?? text;
+
+/** A role as the Studio shows it: its description, and its file's sections (the first, untitled, before any heading). */
+export interface ShownRole {
+  description: string;
+  sections: { title: string; body: string }[];
+}
+/** Every string the Studio shows of a role, once each, in the order it shows them. */
+export function roleStrings(role: ShownRole): string[] {
+  const out: string[] = [];
+  const add = (text: string) => {
+    const trimmed = text.trim();
+    if (trimmed && !out.includes(trimmed)) out.push(trimmed);
+  };
+  add(role.description);
+  for (const section of role.sections) {
+    add(section.title);
+    add(section.body);
+  }
+  return out;
+}
+/** A role in a language: its description and each section, title and text, translated where the translation has it. */
+export function translateRole<T extends ShownRole>(role: T, translation: Strings): T {
+  const tr = shown(translation);
+  return {
+    ...role,
+    description: tr(role.description),
+    sections: role.sections.map((section) => ({
+      title: section.title ? tr(section.title) : "",
+      body: section.body ? tr(section.body) : "",
+    })),
+  };
+}
+/** A role's sections as one Markdown text, the way the Studio shows its file. */
+export const roleBody = (sections: ShownRole["sections"]): string =>
+  sections
+    .map((section) => (section.title ? `## ${section.title}\n\n${section.body}` : section.body))
+    .join("\n\n");
+
 /** The strings of a loop its translation does not have. */
 export const missingStrings = (strings: string[], translation: Strings): string[] =>
   strings.filter((text) => !translation[text]);
 
-const shown = (translation: Strings) => (text: string) => translation[text.trim()] ?? text;
 /** A loop's summary in a language: its description translated, when it can be. */
 export function translateSummary<T extends Pick<LoopSummary, "description">>(
   summary: T,

@@ -12,6 +12,7 @@
  * a reply later continues the same session from its transcript.
  */
 import type { Options, Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { Effort } from "./efforts.js";
 
 /**
  * Variables that tie a process to the Claude Code or Paseo session it runs in.
@@ -76,6 +77,8 @@ export interface LiveSession {
   steps: number;
   /** When the Studio started it, in milliseconds. */
   startedAt: number;
+  /** The reasoning effort its turns run at, as the owner chose it in the chat; null for Claude Code's own. */
+  effort: Effort | null;
 }
 
 /** The messages for a session, as they come: the session reads them as its input. */
@@ -143,6 +146,8 @@ export class SessionHost {
     message: string;
     human: boolean;
     resume?: string | null;
+    /** The reasoning effort its turns run at; null or left out for Claude Code's own. */
+    effort?: Effort | null;
   }): Promise<LiveSession> {
     await this.close(request.key);
     const live: LiveSession = {
@@ -155,6 +160,7 @@ export class SessionHost {
       log: [],
       steps: 0,
       startedAt: Date.now(),
+      effort: request.effort ?? null,
     };
     const inbox = new Inbox();
     const query = this.options.query ?? (await sdkQuery());
@@ -179,6 +185,7 @@ export class SessionHost {
         permissionPrompts: "none",
         includePartialMessages: true,
         ...(this.options.model ? { model: this.options.model } : {}),
+        ...(request.effort ? { effort: request.effort } : {}),
         ...(this.options.executable ? { pathToClaudeCodeExecutable: this.options.executable } : {}),
         ...(request.resume ? { resume: request.resume } : {}),
         stderr: (data: string) => {
@@ -289,6 +296,21 @@ export class SessionHost {
     running.live.state = "running";
     running.live.failure = null;
     running.live.streaming = "";
+    this.changed(running.live);
+    return true;
+  }
+
+  /**
+   * Have a session run at another reasoning effort from its next request on, its
+   * current turn's included; null goes back to the model's default. False when
+   * no session runs it: the level goes with the message that continues it.
+   */
+  async setEffort(key: string, effort: Effort | null): Promise<boolean> {
+    const running = this.sessions.get(key);
+    if (!running || running.live.state === "closed") return false;
+    if (running.live.effort === effort) return true;
+    await running.query.applyFlagSettings({ effortLevel: effort });
+    running.live.effort = effort;
     this.changed(running.live);
     return true;
   }

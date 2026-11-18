@@ -15,6 +15,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isStatusCommand } from "../studio/src/chat/commands.js";
 import { memoryByRole, plannedTicks, selectionChange } from "../studio/src/publish-review.js";
+import { nameProblem, suggestedName } from "../studio/src/project-name.js";
 import { openingOf } from "../studio/src/opening.js";
 
 const source = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -80,6 +81,8 @@ try {
     assert.ok(fs.existsSync(path.join(plain, ".claude/loops", `${loop}.zh.json`)), `${loop}'s translation`);
   }
   for (const role of ["project-setup", "loop-tester", "project-publisher", "watchdog", "experiment-runner"]) assert.ok(fs.existsSync(path.join(plain, ".claude/agents", `${role}.md`)), role);
+  for (const role of ["task-manager", "project-memory", "owner-review", "loop-editor", "role-creator", "project-setup", "loop-tester", "project-publisher", "watchdog", "experiment-runner", "loop-query"])
+    assert.ok(fs.existsSync(path.join(plain, ".claude/agents", `${role}.zh.json`)), `${role}'s translation`);
   assert.ok(read(path.join(plain, ".claude/settings.json")).hooks.PreToolUse, "the hooks guard every loop from the start");
   assert.equal(read(path.join(plain, ".claude/settings.json")).agent, "task-manager", "every session runs as the entry role from the start");
   const projectCli = (root: string, ...args: string[]) =>
@@ -185,14 +188,20 @@ try {
   assert.match(drafted().roles[0].defects.join("\n"), /a new role holds a brief process[\s\S]*"Tips" is knowledge/);
   fs.writeFileSync(path.join(draft, "agents/scout.md"), scout);
   fs.writeFileSync(path.join(draft, "memory/scout.jsonl"), `${JSON.stringify({ kind: "know-how", title: "Look twice", tasks: ["probing"], body: "A second look finds what the first missed.", evidence: ["the owner's description"] })}\n`);
+  // A role runs in English and is shown in the owner's language: a drafted one has a translation of what the Studio shows of it.
+  assert.match(drafted().roles[0].defects.join("\n"), /agents\/scout\.zh\.json lacks \d+ of the strings the Studio shows of it/);
+  const scoutStrings = JSON.parse(loopCheck("strings", "--draft", "scout", "--role", "scout").stdout);
+  assert.deepEqual([scoutStrings.file, scoutStrings.strings.slice(0, 3)], [".contrejour/drafts/scout/agents/scout.zh.json", ["a probe", "Responsibility", "A probe."]]);
+  fs.writeFileSync(path.join(draft, "agents/scout.zh.json"), JSON.stringify({ lang: "zh", strings: Object.fromEntries(scoutStrings.strings.map((english: string) => [english, `（中文）${english}`])) }));
   const ready = drafted();
   assert.ok(ready.ok, JSON.stringify(ready.roles));
   assert.ok(ready.files.includes("memory/scout.jsonl"), "the owner approves the entries with the role");
   const installedDraft = JSON.parse(loopCheck("install", "--draft", "scout", "--digest", ready.digest).stdout);
-  assert.deepEqual(installedDraft.installed, [".claude/agents/scout.md", "memory/scout/pages/look-twice.md"]);
+  assert.deepEqual(installedDraft.installed, [".claude/agents/scout.md", ".claude/agents/scout.zh.json", "memory/scout/pages/look-twice.md"]);
   assert.deepEqual(found("probing"), [], "the planner's memory is the planner's alone");
   assert.deepEqual((JSON.parse(memory("query", "--role", "scout", "--task", "probing").stdout).entries as { title: string }[]).map((entry) => entry.title), ["Look twice"]);
   fs.rmSync(path.join(plain, ".claude/agents/scout.md"));
+  fs.rmSync(path.join(plain, ".claude/agents/scout.zh.json"));
   fs.rmSync(path.join(plain, "memory"), { recursive: true });
   // A loop runs in English and is shown in the owner's language: a drafted loop has a translation of every string the
   // Studio shows of it, which the owner approves and the project installs with it.
@@ -270,6 +279,8 @@ try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     options: Record<string, any>;
     sent: { message: { content: string }; origin?: { kind: string } }[];
+    /** What the Studio set while it ran (applyFlagSettings), in order. */
+    flags: Record<string, unknown>[];
     interrupted: number;
     closed: boolean;
     say(...messages: Record<string, unknown>[]): void;
@@ -285,6 +296,7 @@ try {
     const session: FakeSession = {
       options,
       sent: [],
+      flags: [],
       interrupted: 0,
       closed: false,
       say(...messages) {
@@ -316,6 +328,9 @@ try {
       }
     })();
     return Object.assign(messages, {
+      applyFlagSettings: async (settings: Record<string, unknown>) => {
+        session.flags.push(settings);
+      },
       interrupt: async () => {
         session.interrupted += 1;
         session.say({ type: "system", subtype: "session_state_changed", state: "idle" });
@@ -338,6 +353,13 @@ try {
     assert.deepEqual(projects.projects.map((entry: { name: string }) => entry.name), ["plain"]);
     assert.deepEqual(projects.recent_workspaces, []);
     assert.ok(projects.can_create);
+    // A name the Studio does not take says why where it is typed, and offers one it does.
+    assert.deepEqual(
+      ["", "My-Project", "my project", "项目a", "-x", "a".repeat(65), "plain", "ok-name"].map((typed) => nameProblem(typed, ["plain"])?.key ?? null),
+      ["name_empty", "name_uppercase", "name_characters", "name_characters", "name_start", "name_too_long", "name_taken", null],
+    );
+    assert.deepEqual(nameProblem("my project!"), { key: "name_characters", characters: [" ", "!"] });
+    assert.deepEqual(["My Project", "My-Project", "plain", "--x", "项目", "ok"].map((typed) => suggestedName(typed, ["plain"])), ["my-project", "my-project", "plain-2", "x", null, null]);
     assert.equal(projects.references[0].name, "iterate-and-check");
     assert.ok(projects.references[0].title.zh && projects.references[0].description.en);
 
@@ -402,10 +424,18 @@ try {
     assert.deepEqual([zhFlow.loop.name, zhFlow.params[0].name], ["iterate-and-check", "max_rounds"]);
     // Each says the language it was asked in, so the page asks again when it shows another.
     assert.deepEqual([flow.lang, zhFlow.lang], ["en", "zh"]);
+    assert.equal(zhFlow.nodes.find((node: { kind: string }) => node.kind === "step").phase, "Plan", "a run's steps are matched by the phase, never translated");
+    const roleIn = async (lang: string) => JSON.parse((await request(at(`api/role?name=task-manager&lang=${lang}`), { cookie })).body);
+    const [zhRole, enRole] = [await roleIn("zh"), await roleIn("en")];
+    assert.match(zhRole.body, /^## 职责/m);
+    assert.match(enRole.body, /^## Responsibility/m);
+    assert.notEqual(zhRole.description, enRole.description);
+    assert.deepEqual([zhRole.lang, zhRole.used_by.length >= 0], ["zh", true]);
     assert.match(zhFlow.params[0].description, /最多做几轮/);
     const zhOverview = JSON.parse((await request(at("api/overview?lang=zh"), { cookie })).body);
     assert.match(named(zhOverview.loops, "setup").description, /^设置这个项目的 workflow/);
     assert.deepEqual([overview.lang, zhOverview.lang], ["en", "zh"]);
+    assert.match(named(zhOverview.roles, "planner").description, /[\u4e00-\u9fff]/, "the example's roles come with their translations");
     assert.equal(named(JSON.parse((await request(at("api/overview?lang=fr"), { cookie })).body).loops, "setup").description, named(overview.loops, "setup").description);
     const translation = path.join(first, ".claude/loops/iterate-and-check.zh.json");
     const fullTranslation = fs.readFileSync(translation, "utf8");
@@ -524,7 +554,8 @@ try {
     // The session runs as the entry role, on the role's own instructions, with nobody to approve anything, standing alone.
     process.env.CLAUDECODE = "1";
     process.env.PASEO_AGENT_ID = "someone";
-    const ran = await request(at("api/run"), { cookie, method: "POST", body: { name: "setup" } });
+    assert.equal((await request(at("api/run"), { cookie, method: "POST", body: { name: "setup", effort: "medium" } })).status, 400, "an effort some providers refuse is never passed on");
+    const ran = await request(at("api/run"), { cookie, method: "POST", body: { name: "setup", effort: "high" } });
     assert.equal(ran.status, 200, ran.body);
     delete process.env.CLAUDECODE;
     delete process.env.PASEO_AGENT_ID;
@@ -536,6 +567,7 @@ try {
       [first, "task-manager", "bypassPermissions", true, "none", { type: "preset", preset: "claude_code" }],
     );
     assert.deepEqual([started.env.CLAUDECODE, started.env.PASEO_AGENT_ID, started.env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS], [undefined, undefined, "1"]);
+    assert.equal(started.effort, "high", "the session thinks as hard as the owner chose in the chat");
     await until("the Studio's message reaches the session", () => session.sent.length === 1);
     assert.deepEqual([session.sent[0]!.message.content, session.sent[0]!.origin], ["Run the setup loop.", undefined], "the Studio's own words are never an answer to a review");
     assert.equal(read(path.join(first, ".contrejour/studio/conversations.json")).conversations[0].session.session_id, "fake-session-" + fakeSessions.length);
@@ -574,18 +606,26 @@ try {
     assert.match((await statusOf(id)).failure, /^API Error: 400 reasoning effort/);
     session.say({ type: "result", subtype: "error_during_execution", is_error: true, errors: ["the tool broke", "and again"] });
     await until("the failure is read", async () => (await statusOf(id)).failure === "the tool broke\nand again");
+    // Another effort chosen while it runs: the session takes it at once; back to default, Claude Code's own.
+    const effortTo = (effort: unknown) => request(at("api/authoring/effort"), { cookie, method: "POST", body: { id, effort } });
+    assert.deepEqual(JSON.parse((await effortTo("low")).body), { id, effort: "low", applied: true });
+    assert.deepEqual(JSON.parse((await effortTo("low")).body).applied, true);
+    assert.deepEqual(JSON.parse((await effortTo(null)).body).effort, null);
+    assert.equal((await effortTo("medium")).status, 400);
+    assert.deepEqual(session.flags, [{ effortLevel: "low" }, { effortLevel: null }], "a level it already has is not set again");
     // The owner's message goes in marked as a person's, with what they pointed at; the session works again.
     assert.equal((await answer("nope", "hello")).status, 404);
     assert.equal((await answer(id, "  ")).status, 400);
-    const reply = await answer(id, "Make it shorter", [{ kind: "node", id: "n1", label: "Step 2" }]);
+    const reply = await request(at("api/authoring/answer"), { cookie, method: "POST", body: { id, text: "Make it shorter", references: [{ kind: "node", id: "n1", label: "Step 2" }], effort: "xhigh" } });
     assert.equal(reply.status, 200, reply.body);
+    assert.deepEqual(session.flags.at(-1), { effortLevel: "xhigh" }, "a reply goes at the level chosen when it was sent");
     await until("the reply reaches the session", () => session.sent.length === 2);
     assert.deepEqual([session.sent[1]!.message.content, session.sent[1]!.origin], ["Make it shorter\n\n[On the canvas: Step 2]", { kind: "human" }]);
     assert.deepEqual([(await statusOf(id)).state, (await statusOf(id)).failure], ["running", null]);
-    // Stopping it: what it is doing stops, and it waits for a message.
+    // Stopping it: what it is doing stops, and it stands stopped, a message carrying it on.
     assert.equal((await request(at("api/authoring/stop"), { cookie, method: "POST", body: { id } })).status, 200);
     assert.equal(session.interrupted, 1);
-    await until("it stops", async () => (await statusOf(id)).state === "idle");
+    await until("it stops", async () => (await statusOf(id)).state === "stopped");
     // A loop's result, from the transcript as it grows: it waits for the owner, with the note; a message it never passed on leaves it waiting.
     const transcriptFile = path.join(transcriptFolder, `fake-session-${fakeSessions.length}.jsonl`);
     const notification = (at: string, result: unknown) => JSON.stringify({ type: "user", timestamp: at, promptSource: "system", origin: { kind: "task-notification" }, message: { role: "user", content: `<task-notification>\n<result>${JSON.stringify(result)}</result>\n</task-notification>` } }) + "\n";
@@ -610,6 +650,10 @@ try {
     fs.appendFileSync(transcriptFile, JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "It did not reach the loop." }] } }) + "\n");
     waiting = await statusOf(id);
     assert.deepEqual([waiting.state, waiting.reply_failed, waiting.last_words], ["waiting", true, "It did not reach the loop."]);
+    // Stopped by the owner, it stands stopped, not back at the review its loop last stopped at, until a message or a new result.
+    assert.equal((await request(at("api/authoring/stop"), { cookie, method: "POST", body: { id } })).status, 200);
+    const halted = await statusOf(id);
+    assert.deepEqual([halted.state, halted.review, halted.reply_failed], ["stopped", null, false]);
     // And the loop's end, once it has answered.
     fs.appendFileSync(transcriptFile, notification(later(1), { result: "finished" }));
     const done = await statusOf(id);
@@ -623,11 +667,12 @@ try {
     assert.deepEqual([stopped.state, stopped.failure], ["stopped", "Claude Code process exited with code 1\nthe last line it printed"]);
     // A message continues it from its transcript, as itself, under the same id.
     const before = fakeSessions.length;
-    const continued = await answer(id, "Carry on");
+    assert.deepEqual(JSON.parse((await effortTo("max")).body).applied, false, "no session runs it: the level goes with the next message");
+    const continued = await request(at("api/authoring/answer"), { cookie, method: "POST", body: { id, text: "Carry on", references: [], effort: "max" } });
     assert.equal(continued.status, 200, continued.body);
     assert.equal(fakeSessions.length, before + 1);
     const resumed = fakeSessions.at(-1)!;
-    assert.deepEqual([resumed.options.resume, resumed.options.agent], [`fake-session-${before}`, "task-manager"]);
+    assert.deepEqual([resumed.options.resume, resumed.options.agent, resumed.options.effort], [`fake-session-${before}`, "task-manager", "max"]);
     await until("the message reaches the session", () => resumed.sent.length === 1);
     assert.deepEqual([resumed.sent[0]!.message.content, resumed.sent[0]!.origin], ["Carry on", { kind: "human" }]);
     assert.deepEqual([(await statusOf(id)).state, (await statusOf(id)).failure], ["running", null]);
@@ -733,6 +778,19 @@ try {
     assert.deepEqual((await outputs("before=2026-11-05T08:04:30.000Z")).items.map((item: { name: string }) => item.name), ["project-setup"]);
     assert.deepEqual((await outputs("kind=loop")).items.map((item: { name: string }) => item.name), ["setup"]);
     assert.deepEqual((await outputs("name=project-setup")).items.map((item: { kind: string }) => item.kind), ["role"]);
+    assert.deepEqual((await outputs("loop=setup")).items.map((item: { kind: string; loop: string }) => [item.kind, item.loop]), [["loop", "setup"], ["role", "setup"]], "what a loop's runs gave");
+    assert.deepEqual((await outputs("loop=publish")).items, []);
+    // A loop's runs, newest first: how each stands, what each role did and gave, and the conversation whose session ran it.
+    const runsOf = async (loop: string) => JSON.parse((await request(at(`api/runs?loop=${loop}`), { cookie })).body).runs;
+    const setupRuns = await runsOf("setup");
+    assert.deepEqual(setupRuns.map((run: { id: string; state: string; conversation: string }) => [run.id, run.state, run.conversation]), [["wf_run1", "waiting", "c9"]]);
+    assert.deepEqual(
+      setupRuns[0].steps.map((step: { phase: string; role: string; state: string }) => [step.phase, step.role, step.state]),
+      [["Goal", "project-setup", "done"], ["Task loop", "loop-query", "stopped"]],
+      "a role the run left unfinished did not finish",
+    );
+    assert.deepEqual(setupRuns[0].steps[0].output, { needs_owner: false, goal: "Plan, build and check." });
+    assert.deepEqual(await runsOf("publish"), []);
     // Every execution with how far its latest run got; one stopped partway is resumed by its run's id.
     const plainRun = path.join(transcriptFolder, "sess-plain", "subagents", "workflows", "wf_run2");
     fs.mkdirSync(plainRun, { recursive: true });
@@ -776,6 +834,21 @@ try {
     const resumer = fakeSessions.at(-1)!;
     await until("the resume reaches the session", () => resumer.sent.length === 1);
     assert.deepEqual([resumer.options.resume, resumer.sent[0]!.message.content, resumer.sent[0]!.origin], ["sess-plain", "Resume the run wf_run2 of the setup loop where it stopped, with the arguments it was started with.", undefined], "the Studio's own words, in the conversation's session");
+    // The chat is a conversation with Claude Code as the entry role: the owner's own words, marked as theirs, with what
+    // the canvas shows; the session runs the loop they are for. The chat shows them as the owner's, the canvas line left out.
+    const chatted = await request(at("api/authoring"), { cookie, method: "POST", body: { text: "Make a role that sums up experiment logs", references: [{ kind: "node", id: "s2", label: "Step 2 · Build" }], base: { name: "iterate-and-check", source: "project" } } });
+    assert.equal(chatted.status, 200, chatted.body);
+    const chat = fakeSessions.at(-1)!;
+    const chatTranscript = path.join(transcriptFolder, `fake-session-${fakeSessions.length}.jsonl`);
+    assert.equal(chat.options.agent, "task-manager");
+    await until("the owner's words reach the session", () => chat.sent.length === 1);
+    const chatWords = "Make a role that sums up experiment logs\n\n[In the Studio: the loop `iterate-and-check` (of this project) is on the canvas]\n\n[On the canvas: Step 2 · Build]";
+    assert.deepEqual([chat.sent[0]!.message.content, chat.sent[0]!.origin], [chatWords, { kind: "human" }]);
+    const chatId = JSON.parse(chatted.body).id;
+    assert.equal((await statusOf(chatId)).purpose, "chat");
+    fs.writeFileSync(chatTranscript, `${JSON.stringify({ type: "user", uuid: "h1", timestamp: new Date().toISOString(), origin: { kind: "human" }, message: { role: "user", content: chatWords } })}\n`);
+    const chatRows = (await timelineOf(`id=${chatId}`)).items;
+    assert.deepEqual([chatRows[0].kind, chatRows[0].text, chatRows[0].pointers], ["owner", "Make a role that sums up experiment logs", ["Step 2 · Build"]]);
     // Stopping a conversation no session runs asks nothing of anything; one the project does not have is an error.
     assert.equal((await request(at("api/authoring/stop"), { cookie, method: "POST", body: { id: "c9" } })).status, 200);
     assert.equal((await request(at("api/authoring/stop"), { cookie, method: "POST", body: { id: "nope" } })).status, 500);
@@ -788,12 +861,12 @@ try {
   assert.equal(fs.existsSync(path.join(claudeConfig, ".claude.json")), false, "the Studio writes nothing in Claude Code's own config");
   // Only a project is opened: a folder the installer never made one says so, with its path, and how to make one.
   await assert.rejects(serveStudio(path.join(sandbox, "not-a-project"), { port: 0 }), /not-a-project is not a project .*Projects page/);
-  // The loop on the canvas is what the owner's words change, unless they ask for another loop; a role chosen to change is changed.
-  const { describeRequest } = (await import(pathToFileURL(path.join(source, "dist/tools/studio-authoring.js")).href)) as {
-    describeRequest(loop: string, base: { name: string; source: string } | null, text: string, pointers: { kind: string; id: string; label: string }[]): string;
+  // The owner's first words reach the session as they typed them, with the loop on the canvas and what they pointed at.
+  const { chatMessage } = (await import(pathToFileURL(path.join(source, "dist/tools/studio-authoring.js")).href)) as {
+    chatMessage(text: string, pointers: { kind: string; id: string; label: string }[], base: { name: string; source: string } | null): string;
   };
-  assert.match(describeRequest("loop-authoring", { name: "iterate-and-check", source: "project" }, "Add a review", []), /looking at the loop `iterate-and-check`.*unless they ask for another loop: Add a review/);
-  assert.match(describeRequest("role-authoring", { name: "planner", source: "project" }, "Plan less", []), /^Change the existing role `planner`/);
+  assert.equal(chatMessage("Add a review", [], { name: "x", source: "library" }), "Add a review\n\n[In the Studio: the loop `x` (from the library) is on the canvas]");
+  assert.equal(chatMessage("What does it do?", [], null), "What does it do?");
 
   // --- the hooks: a trajectory recorded, an answer that is not the owner's refused ---
   const first = path.join(workspace, "first");
@@ -942,10 +1015,10 @@ try {
   fs.rmSync(path.join(maker, ".claude/agents/builder.md"));
   published = plan(maker, ...leftOut);
   assert.deepEqual(published.selected.map((unit: { name: string; state: string }) => [unit.name, unit.state]), [["planner", "changed"]]);
-  assert.deepEqual(published.removed, ["projects/maker/roles/builder.md"]);
+  assert.deepEqual(published.removed, ["projects/maker/roles/builder.md", "projects/maker/roles/builder.zh.json"]);
   // A memory entry superseded since is removed from the community's copy.
   assert.equal(makerMemory("update", "--role", "planner", "--id", "one-module-a-round", "--status", "superseded").status, 0);
-  assert.deepEqual(plan(maker, ...leftOut).removed, ["projects/maker/memory/planner/one-module-a-round.json", "projects/maker/roles/builder.md"]);
+  assert.deepEqual(plan(maker, ...leftOut).removed, ["projects/maker/memory/planner/one-module-a-round.json", "projects/maker/roles/builder.md", "projects/maker/roles/builder.zh.json"]);
   // A project of the same name that did not publish it cannot overwrite it.
   const other = path.join(sandbox, "elsewhere", "maker");
   fs.mkdirSync(path.dirname(other), { recursive: true });

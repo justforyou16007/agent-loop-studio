@@ -1,25 +1,31 @@
 import {
-  Activity,
+  BookOpen,
   CheckCircle2,
   Eye,
   FileText,
-  History,
   Languages,
   LayoutPanelLeft,
   FlaskConical,
+  PanelRightClose,
+  PanelRightOpen,
   Play,
   Send,
   RefreshCw,
-  ScrollText,
   SlidersHorizontal,
-  Users,
   FolderKanban,
   Workflow,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AuthoringStatus, Flow, Overview, PublishPlan } from "../../src/tools/studio-types.js";
-import { api, setLanguage } from "./api.js";
+import type {
+  AuthoringStatus,
+  Flow,
+  LoopRun,
+  Overview,
+  PublishPlan,
+} from "../../src/tools/studio-types.js";
+import { api, setEffort, setLanguage } from "./api.js";
+import { isEffort, type Effort } from "../../src/tools/efforts.js";
 import { Inspector } from "./canvas/Inspector.js";
 import { FlowCanvas, focusedIds, pointablesOf } from "./canvas/FlowCanvas.js";
 import { ChatPanel, type ExecutionAction } from "./chat/ChatPanel.js";
@@ -28,18 +34,19 @@ import { LangContext, translate, useLang, type Lang, type TextKey } from "./i18n
 import { ParamsDialog, RoleDraftDialog, RunDialog } from "./dialogs.js";
 import { openingOf } from "./opening.js";
 import { PublishReviewDialog } from "./PublishReviewDialog.js";
+import { PhaseTitles } from "./phases.js";
 import { DefinitionDialog, PreviewDialog, type LoopRef } from "./PreviewDialog.js";
-import { RolesPage } from "./pages/RolesPage.js";
+import { BrowsePage, type BrowseTarget } from "./pages/BrowsePage.js";
 import { ProjectsPage } from "./pages/ProjectsPage.js";
-import { ExecutionsPage } from "./pages/ExecutionsPage.js";
-import { OutputsPage } from "./pages/OutputsPage.js";
-import { RunsPage } from "./pages/RunsPage.js";
+import { RunPanel } from "./create/RunPanel.js";
+import type { StepActivity } from "./canvas/nodes.js";
 import type { ChatMessage, Focus, Names, ProjectUpdate, Reference } from "./types.js";
 import { Button, cx, LoopBadges } from "./ui.js";
 
-type Page = "projects" | "compose" | "roles" | "runs" | "outputs" | "executions";
+type Page = "projects" | "create" | "browse";
 const LANG_KEY = "contrejour-studio-lang";
 const CHAT_WIDTH_KEY = "contrejour-studio-chat-width";
+const EFFORT_KEY = "contrejour-studio-effort";
 const CHAT_WIDTH = 380;
 /** The chat is at least wide enough for its cards, and leaves the canvas room. */
 const chatWidthWithin = (width: number): number =>
@@ -49,6 +56,15 @@ function storedLang(): Lang | null {
   try {
     const value = localStorage.getItem(LANG_KEY);
     return value === "zh" || value === "en" ? value : null;
+  } catch {
+    return null;
+  }
+}
+/** The effort the owner chose last on this browser; null for Claude Code's own. */
+function storedEffort(): Effort | null {
+  try {
+    const value = localStorage.getItem(EFFORT_KEY);
+    return isEffort(value) ? value : null;
   } catch {
     return null;
   }
@@ -93,7 +109,13 @@ function updatedList(
     .join(t("list_parts"));
 }
 /** How a conversation stands when the owner's next message goes to its session. */
-const CONTINUES: ReadonlySet<AuthoringStatus["state"]> = new Set(["waiting", "idle", "stopped"]);
+/** States in which the conversation shown takes the owner's next message: all but working and gone. */
+const CONTINUES: ReadonlySet<AuthoringStatus["state"]> = new Set([
+  "waiting",
+  "idle",
+  "stopped",
+  "done",
+]);
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -105,7 +127,7 @@ export function App() {
     setLanguage(initial);
     return initial;
   });
-  const [page, setPage] = useState<Page>("compose");
+  const [page, setPage] = useState<Page>("create");
   const [flow, setFlow] = useState<Flow | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [references, setReferences] = useState<Reference[]>([]);
@@ -113,21 +135,28 @@ export function App() {
   const [preview, setPreview] = useState<LoopRef | null>(null);
   const [definition, setDefinition] = useState<LoopRef | null>(null);
   const [busy, setBusy] = useState(false);
-  const [role, setRole] = useState<string | null>(null);
+  /** What the browser of loops and roles shows. */
+  const [browse, setBrowse] = useState<BrowseTarget | null>(null);
+  /** The run of the loop on the canvas that the run panel picked, step by step on the canvas. */
+  const [runShown, setRunShown] = useState<LoopRun | null>(null);
+  const [panelOpen, setPanelOpen] = useState(true);
   const [conversation, setConversation] = useState<string | null>(null);
   /** A message sent while the session works, waiting for its turn to end. */
   const [queued, setQueued] = useState<{ text: string; pointed: Reference[] } | null>(null);
   const [status, setStatus] = useState<AuthoringStatus | null>(null);
   const [showOriginal, setShowOriginal] = useState(false);
   /** A role the chat changes, or a new one (name null), instead of the loop on the canvas. */
-  const [roleTarget, setRoleTarget] = useState<{ name: string | null; source: string } | null>(
-    null,
-  );
   const [paramsOpen, setParamsOpen] = useState(false);
   const [runOpen, setRunOpen] = useState(false);
   const [roleDraft, setRoleDraft] = useState<
     { name: string; text: string; original: string | null }[] | null
   >(null);
+  /** How hard the sessions the chat starts and continues think; null for Claude Code's own. */
+  const [effort, setEffortChosen] = useState<Effort | null>(() => {
+    const initial = storedEffort();
+    setEffort(initial);
+    return initial;
+  });
   /** The publication plan the publish loop's review is about, while its page is open. */
   const [publishReview, setPublishReview] = useState<PublishPlan | null>(null);
   /** The review whose page opened by itself: once each. */
@@ -164,7 +193,7 @@ export function App() {
       setSelected(null);
       setReferences([]);
       setPreview(null);
-      setPage("compose");
+      setPage("create");
       if (!quiet) say({ from: "studio", key: "opened", values: { loop: target.name } });
     },
     [say],
@@ -264,6 +293,32 @@ export function App() {
     begin();
     // Runs once, when the page opens.
   }, []);
+  /**
+   * The owner chooses another effort: what is sent from now on runs at it, and
+   * the conversation's session, while one runs it, takes it at once.
+   */
+  const chooseEffort = async (next: Effort | null) => {
+    setEffort(next);
+    setEffortChosen(next);
+    try {
+      if (next) localStorage.setItem(EFFORT_KEY, next);
+      else localStorage.removeItem(EFFORT_KEY);
+    } catch {
+      // It still holds for this page.
+    }
+    if (!conversation) return;
+    try {
+      const { applied } = await api.applyEffort(conversation);
+      if (applied)
+        say({
+          from: "studio",
+          key: "effort_applied",
+          values: { effort: t(next ? `effort_${next}` : "effort_default") },
+        });
+    } catch (reason) {
+      say({ from: "studio", text: t("effort_failed") + (reason as Error).message });
+    }
+  };
   /** The page of the publish loop's review: the plan it is about, when that is the latest plan. */
   const openPublishReview = async (reviewId: string) => {
     try {
@@ -315,7 +370,7 @@ export function App() {
       status: open,
     });
     setStatus(open);
-    setPage("compose");
+    setPage("create");
   };
   /** Another project was opened, started or copied: everything on the page was the last one's. */
   const switched = (update?: ProjectUpdate) => {
@@ -325,48 +380,19 @@ export function App() {
     setSelected(null);
     setConversation(null);
     setStatus(null);
-    setRoleTarget(null);
     pendingMessage.current = null;
     handled.current = "";
-    setPage("compose");
+    setPage("create");
     begin(update);
   };
 
-  const find = async (text: string) => {
-    setBusy(true);
-    const waiting = say({ from: "studio", key: "searching", pending: true });
-    try {
-      const result = await api.search(text);
-      // What the owner describes is a loop for their project: the framework's own loops (setup,
-      // trials, publishing) are not candidates. Only the ones nearly as close as the closest count:
-      // a weak match is noise beside a strong one.
-      const candidates = result.candidates.filter((candidate) => !candidate.framework);
-      const best = candidates[0]?.score ?? 0;
-      const close = candidates
-        .filter((candidate) => candidate.score > 0 && candidate.score >= best * 0.4)
-        .slice(0, 4);
-      // None is close: the authoring loop builds one from the owner's words, looking further first.
-      if (!close.length) {
-        replace(waiting, { from: "studio", key: "found_none_new" });
-        await change(text, []);
-        return;
-      }
-      replace(waiting, {
-        from: "studio",
-        key: "found",
-        values: { n: close.length },
-        candidates: close,
-      });
-      await open({ name: close[0]!.name, source: close[0]!.source }, true);
-    } catch (reason) {
-      replace(waiting, { from: "studio", text: t("load_failed") + (reason as Error).message });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  /** A change to the loop on the canvas goes to loop-authoring; a reply goes to the loop that waits for it. */
-  const change = async (text: string, pointed: Reference[]) => {
+  /**
+   * The chat is a conversation with Claude Code, as the project's entry role: the
+   * owner's words go to the conversation shown (a loop waiting for them takes them
+   * as its answer), or start one, with what the canvas shows; the session runs the
+   * loop they are for, making or changing a loop or a role, running one, or answers.
+   */
+  const talk = async (text: string, pointed: Reference[]) => {
     setBusy(true);
     try {
       if (conversation && status && CONTINUES.has(status.state)) {
@@ -395,39 +421,22 @@ export function App() {
           throw reason;
         }
         setStatus({ ...status, state: "running", review: null });
-      } else if (roleTarget) {
-        const started = await api.startAuthoring({
-          loop: "role-authoring",
-          base: roleTarget.name
-            ? { name: roleTarget.name, source: roleTarget.source as LoopRef["source"] }
-            : null,
-          text,
-          references: [],
-        });
-        setConversation(started.id);
-        setStatus(null);
-        handled.current = "";
-        pendingMessage.current = say({
-          from: "studio",
-          key: roleTarget.name ? "role_started" : "role_new_started",
-          values: { role: roleTarget.name ?? "" },
-          session: started.id,
-        });
       } else {
-        const started = await api.startAuthoring({
-          loop: "loop-authoring",
-          base: flow ? { name: flow.loop.name, source: flow.loop.source } : null,
+        // Shown in the conversation as it is sent, until its transcript has it.
+        const sentAt = new Date().toISOString();
+        const started = await api.startChat({
           text,
           references: pointed,
+          base: flow ? { name: flow.loop.name, source: flow.loop.source } : null,
         });
         setConversation(started.id);
         setStatus(null);
         handled.current = "";
         pendingMessage.current = say({
           from: "studio",
-          key: flow ? "authoring_started" : "authoring_new",
-          values: { loop: flow?.loop.name ?? "" },
+          key: "chat_session",
           session: started.id,
+          replies: [{ text, at: sentAt }],
         });
       }
     } catch (reason) {
@@ -437,24 +446,15 @@ export function App() {
     }
   };
 
-  /**
-   * One chat box. A loop waiting for the owner gets the reply; with a loop on the
-   * canvas, or a role chosen, the authoring loop takes the words, its own steps
-   * finding the loops close to them or changing the one shown; with nothing on
-   * the canvas yet, the close loops are found at once and the closest is shown.
-   */
+  /** One chat box: while the session works, a message waits for its turn to end. */
   const send = async (text: string, pointed: Reference[] = references) => {
     setReferences([]);
-    // While the session works, a message waits for its turn to end.
     if (conversation && status?.state === "running") {
       setQueued({ text, pointed });
       return;
     }
-    // A message to the session that waits or could continue is shown in its conversation, not again here.
-    const reply = Boolean(conversation && status && CONTINUES.has(status.state));
-    if (!reply) say({ from: "owner", text, references: pointed });
-    if (reply || flow || roleTarget) await change(text, pointed);
-    else if (text) await find(text);
+    if (!text && !pointed.length) return;
+    await talk(text, pointed);
   };
   /** The next message starts a conversation of its own, rather than continuing this one. */
   const leaveConversation = () => {
@@ -542,11 +542,9 @@ export function App() {
       setConversation(null);
     }
     if (status.state === "done") {
-      pendingMessage.current = null;
-      // The canvas shows what came of it: the loop installed or chosen as it is, or the one changed.
+      // The conversation goes on; the canvas shows what came of the loop: one installed or chosen as it is.
       const fields = isObject(status.result) ? status.result : {};
       const made =
-        status.loop === "loop-authoring" &&
         (fields.installed === true || fields.reused === true) &&
         typeof fields.loop === "string" &&
         fields.loop
@@ -557,7 +555,6 @@ export function App() {
         if (shownNext)
           void open({ name: shownNext, source: "project" }, true).catch(() => undefined);
       });
-      setConversation(null);
     }
   }, [status, load, open]);
 
@@ -596,7 +593,7 @@ export function App() {
       setConversation(started.id);
       setStatus(null);
       handled.current = "";
-      setPage("compose");
+      setPage("create");
       pendingMessage.current = say({
         from: "studio",
         key: "publish_launched",
@@ -624,15 +621,6 @@ export function App() {
       startFailed(reason);
     }
   };
-  const editRole = (name: string | null, source = "project") => {
-    setRoleTarget({ name, source });
-    setPage("compose");
-    say({
-      from: "studio",
-      key: name ? "role_target" : "role_target_new",
-      values: { role: name ?? "" },
-    });
-  };
 
   const point = (reference: Reference) => {
     setReferences((current) =>
@@ -640,8 +628,8 @@ export function App() {
     );
   };
   const showRole = (name: string) => {
-    setRole(name);
-    setPage("roles");
+    setBrowse({ kind: "role", name });
+    setPage("browse");
   };
   const referencedIds = useMemo(() => new Set(references.map((entry) => entry.id)), [references]);
   const current: LoopRef | null = flow ? { name: flow.loop.name, source: flow.loop.source } : null;
@@ -704,14 +692,65 @@ export function App() {
     window.addEventListener("resize", fit);
     return () => window.removeEventListener("resize", fit);
   }, []);
+  /**
+   * The run the panel picked, on the canvas: each step by its phase, the state
+   * that matters most of its roles' (one working before one waiting, before one
+   * that failed or was stopped, before one done); where a run waits for the
+   * owner or failed, its last step says so.
+   */
   const activity = useMemo(() => {
-    const map = new Map<string, "running" | "done">();
-    if (status?.purpose !== "run" || status.state !== "running" || status.loop !== flow?.loop.name)
-      return map;
-    for (const step of status.progress)
-      if (map.get(step.phase) !== "running") map.set(step.phase, step.done ? "done" : "running");
+    const map = new Map<string, StepActivity>();
+    if (!runShown || !flow || runShown.loop !== flow.loop.name || shown !== flow) return map;
+    const rank: Record<StepActivity, number> = {
+      running: 4,
+      waiting: 3,
+      failed: 2,
+      stopped: 1,
+      done: 0,
+    };
+    const put = (phase: string, state: StepActivity) => {
+      const now = map.get(phase);
+      if (!now || rank[state] > rank[now]) map.set(phase, state);
+    };
+    for (const step of runShown.steps)
+      put(
+        step.phase,
+        step.state === "done" ? "done" : step.state === "running" ? "running" : "stopped",
+      );
+    const last = runShown.steps.at(-1);
+    if (last && runShown.state === "waiting") put(last.phase, "waiting");
+    if (last && runShown.state === "failed") put(last.phase, "failed");
     return map;
-  }, [status, flow]);
+  }, [runShown, flow, shown]);
+  /** A step's title on the canvas, in the page's language, by the phase its roles ran in. */
+  const titleOf = useCallback(
+    (phase: string) => flow?.nodes.find((node) => node.phase === phase)?.title ?? phase,
+    [flow],
+  );
+  /** The chat follows a conversation the run panel names: it shows where that conversation is. */
+  const followConversation = (id: string) => {
+    if (conversation === id) return;
+    setConversation(id);
+    setStatus(null);
+    handled.current = "";
+    pendingMessage.current = say({ from: "studio", key: "session_resumed", session: id });
+  };
+  const stopConversation = async (id: string) => {
+    try {
+      await api.stop(id);
+    } catch (reason) {
+      say({ from: "studio", text: t("failed_start") + (reason as Error).message });
+    }
+  };
+  const resumeConversation = async (id: string) => {
+    try {
+      const resumed = await api.resume(id);
+      followConversation(id);
+      say({ from: "studio", key: "exec_resumed", values: { run: resumed.run } });
+    } catch (reason) {
+      say({ from: "studio", text: t("load_failed") + (reason as Error).message });
+    }
+  };
 
   const language = useMemo(() => ({ lang, t }), [lang, t]);
   return (
@@ -746,11 +785,8 @@ export function App() {
             {(
               [
                 ["projects", "nav_projects", FolderKanban],
-                ["compose", "nav_compose", LayoutPanelLeft],
-                ["roles", "nav_roles", Users],
-                ["runs", "nav_runs", History],
-                ["outputs", "nav_outputs", ScrollText],
-                ["executions", "nav_executions", Activity],
+                ["create", "nav_create", LayoutPanelLeft],
+                ["browse", "nav_browse", BookOpen],
               ] as const
             ).map(([key, label, Icon]) => (
               <button
@@ -801,47 +837,43 @@ export function App() {
           <p className="p-6 text-sm text-ink-4">{t("loading")}</p>
         ) : (
           <div className="min-h-0 flex-1">
-            {page === "compose" && (
+            {page === "create" && (
               <div className="flex h-full">
                 <div className="relative h-full shrink-0" style={{ width: chatWidth }}>
-                  <ChatPanel
-                    messages={messages}
-                    references={references}
-                    pointables={pointables}
-                    busy={busy}
-                    onSend={(text) => void send(text)}
-                    onReference={point}
-                    onRemoveReference={(id) =>
-                      setReferences((list) => list.filter((entry) => entry.id !== id))
-                    }
-                    onPreview={setPreview}
-                    onOpen={(target) => void open(target)}
-                    current={current}
-                    editing={Boolean(flow || roleTarget)}
-                    target={
-                      roleTarget
-                        ? roleTarget.name
-                          ? t("target_role", { role: roleTarget.name })
-                          : t("target_role_new")
-                        : null
-                    }
-                    onClearTarget={() => setRoleTarget(null)}
-                    onViewFiles={setRoleDraft}
-                    waiting={status?.state === "waiting"}
-                    continuing={Boolean(conversation && status && CONTINUES.has(status.state))}
-                    conversation={conversation}
-                    running={Boolean(conversation && status?.state === "running")}
-                    onStop={stopSession}
-                    onNewConversation={leaveConversation}
-                    queued={queued?.text ?? null}
-                    onUnqueue={() => setQueued(null)}
-                    onStatus={() => void showStatus()}
-                    onExecution={(action, picked) => void onExecution(action, picked)}
-                    onReview={(reviewId) => void openPublishReview(reviewId)}
-                    names={names}
-                    focus={focus}
-                    onFocus={toggleFocus}
-                  />
+                  <PhaseTitles.Provider value={titleOf}>
+                    <ChatPanel
+                      messages={messages}
+                      references={references}
+                      pointables={pointables}
+                      busy={busy}
+                      onSend={(text) => void send(text)}
+                      onReference={point}
+                      onRemoveReference={(id) =>
+                        setReferences((list) => list.filter((entry) => entry.id !== id))
+                      }
+                      onPreview={setPreview}
+                      onOpen={(target) => void open(target)}
+                      current={current}
+                      onViewFiles={setRoleDraft}
+                      waiting={status?.state === "waiting"}
+                      continuing={Boolean(conversation && status && CONTINUES.has(status.state))}
+                      conversation={conversation}
+                      running={Boolean(conversation && status?.state === "running")}
+                      onStop={stopSession}
+                      onNewConversation={leaveConversation}
+                      queued={queued?.text ?? null}
+                      onUnqueue={() => setQueued(null)}
+                      onStatus={() => void showStatus()}
+                      onExecution={(action, picked) => void onExecution(action, picked)}
+                      onReview={(reviewId) => void openPublishReview(reviewId)}
+                      onResume={() => conversation && void resumeConversation(conversation)}
+                      effort={effort}
+                      onEffort={(next) => void chooseEffort(next)}
+                      names={names}
+                      focus={focus}
+                      onFocus={toggleFocus}
+                    />
+                  </PhaseTitles.Provider>
                   <div
                     role="separator"
                     aria-orientation="vertical"
@@ -861,8 +893,8 @@ export function App() {
                 </div>
                 <section className="flex min-w-0 flex-1 flex-col">
                   {flow ? (
-                    <div className="flex items-center gap-3 border-b border-line bg-panel px-4 py-2.5">
-                      <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line bg-panel px-4 py-2.5">
+                      <div className="min-w-[280px] flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="font-mono text-[14px] font-semibold">
                             {flow.loop.name}
@@ -938,6 +970,15 @@ export function App() {
                       >
                         <CheckCircle2 size={14} /> {t("use_this")}
                       </Button>
+                      {flow.loop.source === "project" && (
+                        <Button
+                          variant="ghost"
+                          title={t(panelOpen ? "panel_hide" : "panel_show")}
+                          onClick={() => setPanelOpen((open) => !open)}
+                        >
+                          {panelOpen ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}
+                        </Button>
+                      )}
                     </div>
                   ) : null}
                   {draft && (
@@ -1002,26 +1043,29 @@ export function App() {
                     )}
                   </div>
                 </section>
+                {flow && flow.loop.source === "project" && panelOpen && (
+                  <RunPanel
+                    loop={flow.loop.name}
+                    following={status?.state ?? ""}
+                    titleOf={titleOf}
+                    onShown={setRunShown}
+                    onOpenConversation={followConversation}
+                    onStop={(id) => void stopConversation(id)}
+                    onResume={(id) => void resumeConversation(id)}
+                    onRun={() => setRunOpen(true)}
+                  />
+                )}
               </div>
             )}
-            {page === "roles" && (
-              <RolesPage
+            {page === "browse" && (
+              <BrowsePage
                 overview={overview}
-                selected={role}
-                onSelect={setRole}
-                onEdit={editRole}
-                onOpenLoop={(name) => {
-                  const loop =
-                    overview.loops.find(
-                      (entry) => entry.name === name && entry.source === "project",
-                    ) ?? overview.loops.find((entry) => entry.name === name);
-                  if (loop) void open({ name: loop.name, source: loop.source }, true);
-                }}
+                target={browse}
+                onTarget={setBrowse}
+                onOpenLoop={(loop) => void open(loop, true)}
+                onDefinition={setDefinition}
               />
             )}
-            {page === "runs" && <RunsPage overview={overview} />}
-            {page === "outputs" && <OutputsPage />}
-            {page === "executions" && <ExecutionsPage onOpen={openExecution} />}
           </div>
         )}
       </div>
@@ -1094,7 +1138,7 @@ function FocusBar({
       </span>
       {!lit && focus.kind === "role" && (
         <Button size="sm" onClick={() => onRole(focus.name)}>
-          <Users size={12} /> {t("view_role")}
+          <BookOpen size={12} /> {t("view_role")}
         </Button>
       )}
       {!lit && focus.kind === "loop" && (

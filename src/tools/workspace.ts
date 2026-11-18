@@ -174,9 +174,10 @@ export function applyExample(
   for (const [from, to, extension] of [
     ["loops", "loops", ".md"],
     ["loops", "workflows", ".js"],
-    // A loop's translation of what the Studio shows of it.
+    // A loop's and a role's translation of what the Studio shows of it.
     ["loops", "loops", ".zh.json"],
     ["roles", "agents", ".md"],
+    ["roles", "agents", ".zh.json"],
   ] as const) {
     const units = path.join(dir, from);
     if (!fs.existsSync(units)) continue;

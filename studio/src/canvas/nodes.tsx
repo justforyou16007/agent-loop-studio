@@ -1,15 +1,28 @@
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
-import { Bot, Check, Flag, Play, SlidersHorizontal, UserCheck, Workflow } from "lucide-react";
+import {
+  Bot,
+  Check,
+  Flag,
+  Hand,
+  Play,
+  SlidersHorizontal,
+  Square,
+  UserCheck,
+  Workflow,
+  X,
+} from "lucide-react";
 import type { FlowNode, FlowParam } from "../../../src/tools/studio-types.js";
-import { useLang } from "../i18n.js";
+import { useLang, type TextKey } from "../i18n.js";
 import { Badge, cx, formatValue, RoleChip } from "../ui.js";
 
+/** A step in the run the creation area shows: working, done, waiting for the owner, stopped, or failed. */
+export type StepActivity = "running" | "done" | "waiting" | "stopped" | "failed";
 export interface StepData extends Record<string, unknown> {
   node: FlowNode;
   referenced: boolean;
   selected: boolean;
-  /** In the loop running now: going on, or done. */
-  activity?: "running" | "done";
+  /** In the run the creation area shows, how this step stands. */
+  activity?: StepActivity;
   /** Pointed out from the chat; the boxes that are not are greyed. */
   focused?: boolean;
   dimmed?: boolean;
@@ -62,12 +75,27 @@ export function StepNode({ data }: NodeProps<StepNodeType>) {
         referenced && "ring-2 ring-brand-500 ring-offset-2 ring-offset-canvas",
         activity === "running" && "animate-pulse border-brand-500 ring-2 ring-brand-100",
         activity === "done" && "border-ok-600/50",
+        activity === "waiting" && "border-wait-500 ring-2 ring-wait-50",
+        activity === "failed" && "border-bad-600 ring-2 ring-bad-50",
+        activity === "stopped" && "border-dashed border-ink-4",
         focusStyle(data),
       )}
     >
-      {activity === "done" && (
-        <span className="absolute -right-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full bg-ok-600 text-white shadow-card">
-          <Check size={12} strokeWidth={3} />
+      {activity && activity !== "running" && (
+        <span
+          title={t(`run_state_${activity}` as TextKey)}
+          className={cx(
+            "absolute -right-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full text-white shadow-card",
+            activity === "done" && "bg-ok-600",
+            activity === "waiting" && "bg-wait-500",
+            activity === "failed" && "bg-bad-600",
+            activity === "stopped" && "bg-ink-4",
+          )}
+        >
+          {activity === "done" && <Check size={12} strokeWidth={3} />}
+          {activity === "waiting" && <Hand size={11} />}
+          {activity === "failed" && <X size={12} strokeWidth={3} />}
+          {activity === "stopped" && <Square size={9} fill="currentColor" />}
         </span>
       )}
       <Handle type="target" position={Position.Top} id="in" className={hidden} />

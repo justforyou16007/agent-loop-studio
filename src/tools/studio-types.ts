@@ -11,6 +11,8 @@ export interface FlowNode {
   kind: "start" | "step" | "end";
   number: number | null;
   title: string;
+  /** The step's title as the definition writes it, never translated: the phase its roles run in. */
+  phase: string;
   /** The step's text from the definition, Markdown. */
   text: string;
   /** Paragraphs of the definition between the previous step and this one. */
@@ -126,6 +128,8 @@ export interface RoleDetail extends RoleSummary {
   effort: string;
   body: string;
   used_by: string[];
+  /** The language its strings were asked in (`en` when none was). */
+  lang?: string;
 }
 export interface RunSummary {
   id: string;
@@ -157,8 +161,8 @@ export interface ReviewWait {
 /** A conversation with an authoring loop, as the page shows it. */
 export interface AuthoringStatus {
   id: string;
-  /** Changing a loop or role through its authoring loop, or running one of the project's loops. */
-  purpose: "authoring" | "run";
+  /** The owner's conversation in the chat, running one of the project's loops, or (recorded earlier) changing a loop or role. */
+  purpose: "chat" | "run" | "authoring";
   loop: string;
   base: { name: string; source: string } | null;
   started_at: string;
@@ -371,10 +375,41 @@ export type ToolDetail =
   | { kind: "text"; input: string; output: string; error: string };
 
 /** What a role or a loop gave, as the output viewer shows it. */
+/** One role a loop run started, as the creation area shows it. */
+export interface RunStep {
+  key: string;
+  agent: string;
+  /** The loop's phase it ran in: the step's title as the definition names it. */
+  phase: string;
+  label: string;
+  role: string;
+  state: "running" | "done" | "stopped";
+  started_at: string;
+  ended_at: string | null;
+  /** What it gave: its whole result, once it finished. */
+  output: unknown;
+}
+/** A run of a loop: by whom, how it stands, what each role did, and what the loop returned. */
+export interface LoopRun {
+  id: string;
+  loop: string;
+  /** The session that ran it. */
+  session: string;
+  /** The Studio's conversation whose session ran it; null for a session of the owner's own. */
+  conversation: string | null;
+  started_at: string;
+  ended_at: string | null;
+  state: "running" | "waiting" | "done" | "stopped" | "failed";
+  /** What the loop returned: its result, or the review it waits at. */
+  result: unknown;
+  steps: RunStep[];
+}
 export interface OutputItem {
   at: string;
   kind: "role" | "loop";
   name: string;
+  /** The loop whose run gave it: the loop itself for a loop's result. */
+  loop: string | null;
   session: string;
   run: string | null;
   step: string;

@@ -40,6 +40,8 @@ import {
   flowStrings,
   missingStrings,
   readTranslations,
+  roleBody,
+  roleStrings,
   translationFile,
   type Lang,
   type Strings,
@@ -108,6 +110,10 @@ export interface RoleView {
   tools: string;
   effort: string;
   body: string;
+  /** The file's sections, as the body shows them: what a translation translates. */
+  sections: { title: string; body: string }[];
+  /** What the Studio shows of it in the owner's language, by language. */
+  translations: Partial<Record<Lang, Strings>>;
   used_by: string[];
 }
 export interface ViewData {
@@ -252,6 +258,8 @@ interface RoleFile {
   source: "project" | "library";
   text: string;
   framework?: boolean;
+  /** What the Studio shows of it in the owner's language, by language. */
+  translations?: Partial<Record<Lang, Strings>>;
 }
 interface LoopFile {
   name: string;
@@ -304,6 +312,7 @@ function libraryFiles(root: string) {
             name: file.slice(0, -3),
             source: "library",
             text: readText(path.join(roleDir, file)) ?? "",
+            translations: readTranslations(path.join(roleDir, file)),
           });
     }
   return { loops, roles };
@@ -443,6 +452,7 @@ async function describeLoop(file: LoopFile, context: LoopContext): Promise<LoopV
 
 function describeRole(file: RoleFile, loops: LoopView[]): RoleView {
   const fields = frontmatter(file.text);
+  const sections = sectionsOf(file.text);
   return {
     name: file.name,
     source: file.source,
@@ -451,9 +461,9 @@ function describeRole(file: RoleFile, loops: LoopView[]): RoleView {
     description: fields.description ?? "",
     tools: fields.tools ?? "",
     effort: fields.effort ?? "",
-    body: sectionsOf(file.text)
-      .map((entry) => (entry.title ? `## ${entry.title}\n\n${entry.body}` : entry.body))
-      .join("\n\n"),
+    body: roleBody(sections),
+    sections,
+    translations: file.translations ?? {},
     used_by: loops.filter((loop) => loop.roles.includes(file.name)).map((loop) => loop.name),
   };
 }
@@ -533,6 +543,7 @@ export async function collectView(
       source: "project",
       text,
       framework: isBase("agents", file.slice(0, -3), text),
+      translations: readTranslations(path.join(rolesDir(root), file)),
     };
   });
   for (const role of extra.roles)
@@ -626,6 +637,40 @@ export async function shownStrings(
   };
 }
 
+/**
+ * Every string the Studio shows of a role, and those its translation into
+ * `lang` lacks: in a draft when one is named (the draft's role, or the project's
+ * when the draft does not change it), otherwise as the project has it.
+ */
+export async function roleShownStrings(
+  projectRoot: string,
+  name: string,
+  options: { draft?: string; lang?: Lang } = {},
+): Promise<{ role: string; lang: Lang; file: string; strings: string[]; missing: string[] }> {
+  const root = path.resolve(projectRoot);
+  const lang = options.lang ?? "zh";
+  const drafted = options.draft ? await collectDraftView(root, options.draft, false) : null;
+  if (options.draft && !drafted) failA1("NO_DRAFT", `there is no draft ${options.draft}`);
+  const view = drafted ? drafted.view : await collectView(root, false, false);
+  const role =
+    view.roles.find((entry) => entry.name === name && entry.source === "project") ??
+    view.roles.find((entry) => entry.name === name);
+  if (!role) failA1("NOT_FOUND", `there is no role ${name}`);
+  const draftFile = options.draft
+    ? path.join(root, ".contrejour", "drafts", options.draft, "agents", `${name}.md`)
+    : null;
+  const file =
+    draftFile && fs.existsSync(draftFile) ? draftFile : path.join(rolesDir(root), `${name}.md`);
+  const strings = roleStrings(role);
+  return {
+    role: name,
+    lang,
+    file: path.relative(root, translationFile(file, lang)).split(path.sep).join("/"),
+    strings,
+    missing: missingStrings(strings, role.translations[lang] ?? {}),
+  };
+}
+
 /** A draft in `.contrejour/drafts/<draft>/`: the loops and roles it holds, as the page shows them. */
 export interface DraftView {
   draft: string;
@@ -647,6 +692,7 @@ export async function collectDraftView(
     name: file.slice(0, -3),
     source: "project",
     text: readText(path.join(dir, "agents", file)) ?? "",
+    translations: readTranslations(path.join(dir, "agents", file)),
   }));
   const draftLoops: LoopFile[] = markdownFiles(path.join(dir, "loops")).map((file) => ({
     name: file.slice(0, -3),

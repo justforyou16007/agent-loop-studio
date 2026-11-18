@@ -6,6 +6,7 @@ import type { ProjectUpdate } from "../types.js";
 import { DeleteProjectDialog, WorkspaceDialog } from "../dialogs.js";
 import { useLang } from "../i18n.js";
 import { Badge, Button, cx } from "../ui.js";
+import { nameProblem, suggestedName, type NameProblem } from "../project-name.js";
 
 /** The workspace's projects: open, copy or delete one, start one from an example, or switch to another workspace. */
 export function ProjectsPage({ onOpened }: { onOpened: (update?: ProjectUpdate) => void }) {
@@ -44,7 +45,39 @@ export function ProjectsPage({ onOpened }: { onOpened: (update?: ProjectUpdate) 
       setBusy(false);
     }
   };
-  const valid = /^[a-z0-9][a-z0-9._-]{0,63}$/.test(name);
+  // What a name breaks, said where it is typed, with a name that would do.
+  const taken = (info?.projects ?? []).map((project) => project.name);
+  const problem = nameProblem(name, taken);
+  const copyProblem = nameProblem(copyName, taken);
+  const reason = (found: NameProblem): string =>
+    found.key === "name_characters"
+      ? t("name_characters", {
+          chars: found.characters
+            .map((character) => (character === " " ? t("name_space") : `“${character}”`))
+            .join(t("list_join")),
+        })
+      : found.key === "name_too_long"
+        ? t("name_too_long", { n: found.length })
+        : t(found.key);
+  /** Under a name being typed: what it breaks, and the name it could be instead. */
+  const nameCheck = (typed: string, found: NameProblem | null, use: (next: string) => void) => {
+    if (!typed || !found) return null;
+    const instead = suggestedName(typed, taken);
+    return (
+      <p role="alert" className="mt-1 text-xs leading-5 text-bad-600">
+        {reason(found)}
+        {instead && (
+          <button
+            type="button"
+            onClick={() => use(instead)}
+            className="ml-1.5 rounded px-1 font-mono text-brand-700 underline hover:bg-brand-50"
+          >
+            {t("name_use", { name: instead })}
+          </button>
+        )}
+      </p>
+    );
+  };
   /** A deleted project: when it was the one open, the page starts over without one. */
   const remove = async (project: string) => {
     await api.deleteProject(project);
@@ -141,21 +174,29 @@ export function ProjectsPage({ onOpened }: { onOpened: (update?: ProjectUpdate) 
                   )}
                 </p>
                 {copying === project.name ? (
-                  <div className="mt-2 flex gap-1.5">
-                    <input
-                      value={copyName}
-                      onChange={(event) => setCopyName(event.target.value)}
-                      placeholder={t("project_copy_name")}
-                      className="h-7 min-w-0 flex-1 rounded-lg border border-line-strong px-2 font-mono text-xs"
-                    />
-                    <Button
-                      size="sm"
-                      variant="primary"
-                      disabled={busy || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(copyName)}
-                      onClick={() => void act(() => api.copyProject(project.name, copyName))}
-                    >
-                      <Copy size={12} /> {t("project_copy")}
-                    </Button>
+                  <div className="mt-2">
+                    <div className="flex gap-1.5">
+                      <input
+                        value={copyName}
+                        onChange={(event) => setCopyName(event.target.value)}
+                        placeholder={t("project_copy_name")}
+                        aria-invalid={Boolean(copyName && copyProblem)}
+                        className={cx(
+                          "h-7 min-w-0 flex-1 rounded-lg border px-2 font-mono text-xs",
+                          copyName && copyProblem ? "border-bad-600" : "border-line-strong",
+                        )}
+                      />
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        disabled={busy || Boolean(copyProblem)}
+                        title={copyProblem ? reason(copyProblem) : undefined}
+                        onClick={() => void act(() => api.copyProject(project.name, copyName))}
+                      >
+                        <Copy size={12} /> {t("project_copy")}
+                      </Button>
+                    </div>
+                    {nameCheck(copyName, copyProblem, setCopyName)}
                   </div>
                 ) : (
                   <div className="mt-2 flex gap-1.5">
@@ -206,9 +247,14 @@ export function ProjectsPage({ onOpened }: { onOpened: (update?: ProjectUpdate) 
                 <input
                   value={name}
                   onChange={(event) => setName(event.target.value)}
-                  className="mt-1 block h-8 w-72 rounded-lg border border-line-strong px-2 font-mono text-[13px]"
+                  aria-invalid={Boolean(name && problem)}
+                  className={cx(
+                    "mt-1 block h-8 w-72 rounded-lg border px-2 font-mono text-[13px]",
+                    name && problem ? "border-bad-600" : "border-line-strong",
+                  )}
                 />
               </label>
+              {nameCheck(name, problem, setName)}
               <div className="mt-4 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-ink-4">
                 {t("project_from")}
                 {info?.community.present && (
@@ -268,7 +314,8 @@ export function ProjectsPage({ onOpened }: { onOpened: (update?: ProjectUpdate) 
               <div className="mt-4">
                 <Button
                   variant="primary"
-                  disabled={busy || !valid}
+                  disabled={busy || Boolean(problem)}
+                  title={problem ? reason(problem) : undefined}
                   onClick={() => void act(() => api.newProject(name, reference))}
                 >
                   <Plus size={14} /> {t("project_create")}

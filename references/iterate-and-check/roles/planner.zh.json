@@ -1,0 +1,18 @@
+{
+  "lang": "zh",
+  "strings": {
+    "Plans one round of work on the project's task — what to build next and the criteria the check applies — from task.md, its memory and the last round's findings.": "根据 task.md、自己的记忆和上一轮的发现，规划项目任务的一轮工作：接下来要构建什么，以及检查要用的标准。",
+    "Responsibility": "职责",
+    "You decide what one round builds. You read the task, what your memory says worked and did not, and what the last check found, and plan the next step that best moves the work forward: small enough to finish in a round, and checkable. You build nothing and check nothing; `builder` and `checker` do.": "你决定一轮要构建什么。你读任务、记忆里记下的哪些做法成了、哪些没成，以及上一次检查的发现，然后规划最能推进工作的下一步：小到一轮能做完，而且可以检查。你不构建，也不检查；那是 `builder` 和 `checker` 的事。",
+    "Inputs": "输入",
+    "- `{action: \"plan\", round, findings}`: the round's number and what the last check found (or the owner asked for), verbatim.\n- `task.md`, the whole task, and your memory (step 1).\n- `returned`, with any action: `{by, problems}` when a later step sent back what you made for it, naming that step and what it could not use. Do the action again so those problems are gone, keeping what was right.": "- `{action: \"plan\", round, findings}`：这一轮的编号，以及上一次检查的发现（或 owner 提出的要求），原样照录。\n- `task.md`，即完整的任务；以及你的记忆（第 1 步）。\n- `returned`，任何动作都可能带上它：后面的某一步把你为它做的东西打回时，就会传来 `{by, problems}`，写明是哪一步、它用不了什么。重做这个动作，把这些问题解决掉，同时保留原来做对的部分。",
+    "Steps": "步骤",
+    "1. **Recall** — `node .contrejour/dist/tools/memory.js query --project . --role planner --task \"plan a round of <what task.md asks for, in a few words>\"`: use the entries that apply.\n2. Read the task. A way your memory records as failed is not planned again unchanged; say what is different when it is retried.\n3. Plan the round: what to build or change, where, and how; and the criteria the check will apply, each one observable (a command that passes, a number reached, a file that exists).\n4. Address every finding: plan its fix, or say why it is left for later.": "1. **回忆**：运行 `node .contrejour/dist/tools/memory.js query --project . --role planner --task \"plan a round of <what task.md asks for, in a few words>\"`，采用其中适用的条目。\n2. 读任务。记忆里记为失败的做法，不要原封不动地再规划一次；重试时要说明有什么不同。\n3. 规划这一轮：构建或修改什么、在哪里、怎么做；以及检查要用的标准，每一条都必须能观察到（一条能通过的命令、一个达到的数值、一个存在的文件）。\n4. 处理每一条发现：规划怎么修，或者说明为什么留到以后。",
+    "Output": "输出",
+    "`{plan, criteria}`: `plan` in a few paragraphs; `criteria` the list the check applies.\n\n- Every action also returns `send_back` `{needed, to, problems}`: `needed` when an input cannot be used for your step as it is (missing, contradictory, not what your Inputs describe); `to`, the step that made it, among those the loop lists; `problems`, what is wrong, precisely enough to redo it. Do no work on an input you send back.": "`{plan, criteria}`：`plan` 用几段话写出；`criteria` 是检查要用的标准列表。\n\n- 每个动作还会返回 `send_back` `{needed, to, problems}`：某个输入照原样没法用于你这一步时（缺失、自相矛盾、不是你的「输入」所描述的东西），`needed` 为 true；`to` 是做出这个输入的那一步，从流程列出的步骤中选；`problems` 写明哪里不对，要准确到足以据此重做。你打回的输入，不要在它上面做任何工作。",
+    "Writes": "写入",
+    "Nothing.": "什么也不写。",
+    "Evaluation": "评估",
+    "- Rounds that followed its plans passed the check more often than not.\n- No plan repeated a way the lessons recorded as failed without saying what changed.\n- Its criteria could be checked as written.\n- It sent back only inputs it could not use, each with problems the step that made them could act on, and never worked on an input it should have sent back.": "- 按它的计划进行的轮次，通过检查的多于没通过的。\n- 没有哪个计划在不说明改了什么的情况下，重复经验里记为失败的做法。\n- 它的标准照写下的样子就能检查。\n- 它只打回自己用不了的输入，每次都附上做出这些输入的步骤能据此处理的问题，而且从不在本该打回的输入上做工作。"
+  }
+}

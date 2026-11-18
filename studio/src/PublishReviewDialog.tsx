@@ -68,7 +68,7 @@ export function PublishReviewDialog({
       return next;
     });
   const reply = () => {
-    const join = (names: string[]) => names.join(t("publish_join"));
+    const join = (names: string[]) => names.join(t("list_join"));
     onReply(
       changed
         ? [
@@ -184,7 +184,7 @@ export function PublishReviewDialog({
                       </div>
                       {entry.tasks.length > 0 && (
                         <p className="mt-0.5 text-[11.5px] text-ink-4">
-                          {t("publish_tasks", { tasks: entry.tasks.join(t("publish_join")) })}
+                          {t("publish_tasks", { tasks: entry.tasks.join(t("list_join")) })}
                         </p>
                       )}
                       <p className="mt-1 whitespace-pre-wrap text-[12.5px] leading-5 text-ink-2">

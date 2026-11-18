@@ -9,9 +9,9 @@ import {
   Clock,
   Square,
   Eye,
+  Gauge,
   LayoutPanelLeft,
   Loader2,
-  PencilLine,
   SlidersHorizontal,
   Sparkles,
   Workflow,
@@ -27,6 +27,8 @@ import type { ChatMessage, Focus, Names, Pointable, Reference } from "../types.j
 import { Badge, Button, cx, LoopBadges } from "../ui.js";
 import { ExecutionCard } from "../ExecutionCard.js";
 import { isStatusCommand } from "./commands.js";
+import { usePhaseTitle } from "../phases.js";
+import { EFFORTS, isEffort, type Effort } from "../../../src/tools/efforts.js";
 
 /** The @ being typed just before the caret, and what follows it so far; none inside a word, such as an e-mail address. */
 function mentionAt(text: string, caret: number): { start: number; query: string } | null {
@@ -55,11 +57,8 @@ export function ChatPanel({
   onPreview,
   onOpen,
   current,
-  editing,
   waiting,
   continuing,
-  target,
-  onClearTarget,
   onViewFiles,
   names,
   focus,
@@ -73,6 +72,9 @@ export function ChatPanel({
   onStatus,
   onExecution,
   onReview,
+  onResume,
+  effort,
+  onEffort,
 }: {
   messages: ChatMessage[];
   references: Reference[];
@@ -85,15 +87,10 @@ export function ChatPanel({
   onPreview: (target: LoopRef) => void;
   onOpen: (target: LoopRef) => void;
   current: LoopRef | null;
-  /** A loop is on the canvas, or a role is chosen: a message changes it. */
-  editing: boolean;
   /** A loop waits for the owner's reply. */
   waiting: boolean;
   /** The next message goes to the session shown, rather than starting a conversation. */
   continuing: boolean;
-  /** What the chat changes instead of the loop on the canvas, such as a role. */
-  target: string | null;
-  onClearTarget: () => void;
   onViewFiles: (files: NonNullable<ChatMessage["files"]>) => void;
   /** The roles and loops the project knows, whose names in the chat point them out on the canvas. */
   names: Names;
@@ -115,6 +112,11 @@ export function ChatPanel({
   onExecution: (action: ExecutionAction, status: AuthoringStatus) => void;
   /** Open the page of the review the conversation waits at, for a review that has one (publishing). */
   onReview: (reviewId: string) => void;
+  /** Resume the conversation's loop run where it stopped. */
+  onResume: () => void;
+  /** How hard the sessions the chat starts and continues think; null for Claude Code's own. */
+  effort: Effort | null;
+  onEffort: (next: Effort | null) => void;
 }) {
   const { t } = useLang();
   const [draft, setDraft] = useState("");
@@ -287,6 +289,7 @@ export function ChatPanel({
                 onNewConversation={onNewConversation}
                 onExecution={onExecution}
                 onReview={onReview}
+                onResume={onResume}
               />
             ))}
             {onlyWelcome && (
@@ -331,20 +334,6 @@ export function ChatPanel({
               type="button"
               title={t("queue_cancel")}
               onClick={onUnqueue}
-              className="rounded p-0.5 hover:bg-white"
-            >
-              <X size={12} />
-            </button>
-          </div>
-        )}
-        {target && (
-          <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-loop-50 px-2.5 py-1.5 text-[12px] text-loop-600">
-            <PencilLine size={12} />
-            <span className="flex-1 truncate font-medium">{target}</span>
-            <button
-              type="button"
-              title={t("remove")}
-              onClick={onClearTarget}
               className="rounded p-0.5 hover:bg-white"
             >
               <X size={12} />
@@ -498,13 +487,7 @@ export function ChatPanel({
               }
             }}
             placeholder={t(
-              waiting
-                ? "composer_reply"
-                : continuing
-                  ? "composer_continue"
-                  : editing
-                    ? "composer_change"
-                    : "composer",
+              waiting ? "composer_reply" : continuing ? "composer_continue" : "composer",
             )}
             className="block w-full resize-none bg-transparent px-3 py-2.5 text-[13px] leading-5 outline-none placeholder:text-ink-4"
           />
@@ -518,6 +501,27 @@ export function ChatPanel({
             >
               <AtSign size={16} />
             </button>
+            <label
+              title={t("effort_hint")}
+              className="mr-auto ml-1 flex items-center gap-1 text-[11.5px] text-ink-4"
+            >
+              <Gauge size={13} />
+              <span>{t("effort")}</span>
+              <select
+                value={effort ?? ""}
+                onChange={(event) =>
+                  onEffort(isEffort(event.target.value) ? event.target.value : null)
+                }
+                className="h-6 rounded-md border border-line bg-white px-1 text-[11.5px] text-ink-2 outline-none focus:border-brand-500"
+              >
+                <option value="">{t("effort_default")}</option>
+                {EFFORTS.map((level) => (
+                  <option key={level} value={level}>
+                    {t(`effort_${level}`)}
+                  </option>
+                ))}
+              </select>
+            </label>
             {running && !draft.trim() && !references.length ? (
               <button
                 type="button"
@@ -569,6 +573,7 @@ function Message({
   onNewConversation,
   onExecution,
   onReview,
+  onResume,
 }: {
   message: ChatMessage;
   onPreview: (target: LoopRef) => void;
@@ -585,6 +590,7 @@ function Message({
   onNewConversation: () => void;
   onExecution: (action: ExecutionAction, status: AuthoringStatus) => void;
   onReview: (reviewId: string) => void;
+  onResume: () => void;
 }) {
   const { t } = useLang();
   if (message.from === "owner")
@@ -637,6 +643,7 @@ function Message({
             pending={message.replies ?? []}
             onReply={message.session === conversation ? onReply : undefined}
             onReview={message.session === conversation && onReply ? onReview : undefined}
+            onResume={message.session === conversation ? onResume : undefined}
             onStop={message.session === conversation ? onStop : undefined}
             onNewConversation={message.session === conversation ? onNewConversation : undefined}
             onViewFiles={onViewFiles}
@@ -787,6 +794,7 @@ function Mention({
   onFocus: (focus: Focus) => void;
 }) {
   const { t } = useLang();
+  const titleOf = usePhaseTitle();
   const target: Focus = { kind, name };
   return (
     <button
@@ -802,7 +810,7 @@ function Mention({
       )}
     >
       {kind === "loop" && <Workflow size={11} className="shrink-0" />}
-      {name}
+      {kind === "step" ? titleOf(name) : name}
     </button>
   );
 }

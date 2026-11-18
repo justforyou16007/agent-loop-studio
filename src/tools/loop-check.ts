@@ -43,6 +43,7 @@ import {
 import { libraryRoots } from "./installation.js";
 import { insertMemory, readSeeds, slugOf, updateMemory } from "./memory.js";
 import { TRANSLATED, type Lang } from "./translations.js";
+import { EFFORTS, isEffort } from "./efforts.js";
 import { hasManifest, knownSides, readManifest, triggersOf } from "./project-manifest.js";
 
 /** Sections every role file has, so its work, its inputs and how it is judged are explicit. */
@@ -746,8 +747,6 @@ export interface RoleReport {
 /** Who receives a role or loop from the library: every project (`framework`), or the projects of one side. */
 export const sidesKnown = (root: string): string[] => knownSides(root);
 /** Every role file names itself after its file, describes itself, says who it serves and has the required sections. */
-/** The reasoning efforts a role may ask for that every model provider Claude Code reaches accepts. */
-const ROLE_EFFORTS = ["low", "high", "xhigh", "max"];
 /** The text of a Markdown section, `## <title>` up to the next `## `; null when there is none. */
 export function sectionOf(text: string, title: string): string | null {
   const lines = text.split(/\r?\n/);
@@ -785,9 +784,9 @@ export function checkRoles(root: string, only?: string[]): RoleReport[] {
       if (!sides.includes(fields.side ?? ""))
         defects.push(`frontmatter side must be one of ${sides.join(", ")}`);
       // Claude Code sends a role's effort to the model's provider as it is, and some providers refuse medium.
-      if (fields.effort !== undefined && !ROLE_EFFORTS.includes(fields.effort))
+      if (fields.effort !== undefined && !isEffort(fields.effort))
         defects.push(
-          `frontmatter effort must be one of ${ROLE_EFFORTS.join(", ")}, or left out to use the session's own: some model providers (DeepSeek among them) refuse ${fields.effort || "an empty one"}`,
+          `frontmatter effort must be one of ${EFFORTS.join(", ")}, or left out to use the session's own: some model providers (DeepSeek among them) refuse ${fields.effort || "an empty one"}`,
         );
       for (const section of ROLE_SECTIONS)
         if (!new RegExp(`^##\\s+${section}\\b`, "mi").test(text))
@@ -844,7 +843,8 @@ function briefProblems(text: string): string[] {
 const DRAFT_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 /** Where a draft keeps its files, as .claude/ would hold them. */
 const DRAFT_LAYOUT: Record<string, string[]> = {
-  agents: [".md"],
+  // A role, in English, and its translation of what the Studio shows of it.
+  agents: [".md", ...TRANSLATED.map((lang) => `.${lang}.json`)],
   // A loop's definition, in English, and its translation of what the Studio shows of it.
   loops: [".md", ...TRANSLATED.map((lang) => `.${lang}.json`)],
   workflows: [".js"],
@@ -981,7 +981,7 @@ export async function checkDraft(root: string, id: string): Promise<DraftReport>
     }
     for (const report of roles) report.ok = !report.defects.length;
     // Read here, not at load: the view reads the check, and the check reads it only for drafts.
-    const { shownStrings } = await import("./loop-view.js");
+    const { shownStrings, roleShownStrings } = await import("./loop-view.js");
     for (const name of draftNames(root, id, "loops")) {
       const report = loops.find((entry) => entry.loop === name);
       if (!report) continue;
@@ -990,6 +990,18 @@ export async function checkDraft(root: string, id: string): Promise<DraftReport>
         if (!missing.length) continue;
         report.defects.push(
           `a loop is written in English, then translated: ${file} lacks ${missing.length} of the strings the Studio shows of it (loop-check.js strings lists them)`,
+        );
+        report.ok = false;
+      }
+    }
+    for (const name of draftNames(root, id, "agents")) {
+      const report = roles.find((entry) => entry.role === name);
+      if (!report) continue;
+      for (const lang of TRANSLATED) {
+        const { file, missing } = await roleShownStrings(root, name, { draft: id, lang });
+        if (!missing.length) continue;
+        report.defects.push(
+          `a role is written in English, then translated: ${file} lacks ${missing.length} of the strings the Studio shows of it (loop-check.js strings --role lists them)`,
         );
         report.ok = false;
       }
@@ -1185,28 +1197,38 @@ function cli(): void {
   program
     .command("strings")
     .description(
-      "What the Studio shows of a loop, which its translation translates, and what the translation lacks",
+      "What the Studio shows of a loop (or, with --role, of a role), which its translation translates, and what the translation lacks",
     )
     .requiredOption("--project <dir>")
-    .option("--draft <id>", "the loop as the draft has it")
+    .option("--draft <id>", "as the draft has it")
     .option("--lang <lang>", "the translation's language", "zh")
-    .argument("<loop>")
-    .action(async (loop: string, options: { project: string; draft?: string; lang: string }) => {
-      try {
-        if (!(TRANSLATED as readonly string[]).includes(options.lang))
-          failA1("INVALID_VALUE", `a loop is translated into ${TRANSLATED.join(", ")}`);
-        const { shownStrings } = await import("./loop-view.js");
-        print(
-          await shownStrings(options.project, loop, {
+    .option("--role <role>", "a role's strings, rather than a loop's")
+    .argument("[loop]")
+    .action(
+      async (
+        loop: string | undefined,
+        options: { project: string; draft?: string; lang: string; role?: string },
+      ) => {
+        try {
+          if (!(TRANSLATED as readonly string[]).includes(options.lang))
+            failA1("INVALID_VALUE", `loops and roles are translated into ${TRANSLATED.join(", ")}`);
+          if (!options.role && !loop) failA1("INVALID_VALUE", "name a loop, or a role with --role");
+          const { shownStrings, roleShownStrings } = await import("./loop-view.js");
+          const asked = {
             ...(options.draft ? { draft: options.draft } : {}),
             lang: options.lang as Lang,
-          }),
-          true,
-        );
-      } catch (error) {
-        failed(error);
-      }
-    });
+          };
+          print(
+            options.role
+              ? await roleShownStrings(options.project, options.role, asked)
+              : await shownStrings(options.project, loop!, asked),
+            true,
+          );
+        } catch (error) {
+          failed(error);
+        }
+      },
+    );
   program
     .command("draft")
     .description("A draft's files, its digest and the check of its loops and roles")

@@ -120,9 +120,12 @@ function seededTarget(relative) {
   const loop = /^library\/loops\/([a-z0-9-]+)\/([^/]+)\.(md|js)$/.exec(relative);
   if (loop && sides.has(loop[1]))
     return `.claude/${loop[3] === "md" ? "loops" : "workflows"}/${loop[2]}.${loop[3]}`;
-  // A loop's translation of what the Studio shows of it lives beside its definition.
-  const translation = /^library\/loops\/([a-z0-9-]+)\/([^/]+\.[a-z]{2}\.json)$/.exec(relative);
-  if (translation && sides.has(translation[1])) return `.claude/loops/${translation[2]}`;
+  // A loop's or a role's translation of what the Studio shows of it lives beside it.
+  const translation = /^library\/(loops|roles)\/([a-z0-9-]+)\/([^/]+\.[a-z]{2}\.json)$/.exec(
+    relative,
+  );
+  if (translation && sides.has(translation[2]))
+    return `.claude/${translation[1] === "loops" ? "loops" : "agents"}/${translation[3]}`;
   return null;
 }
 const seeded = [];

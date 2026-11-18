@@ -16,9 +16,11 @@ import { flowOf } from "./flow.js";
 import { entryRoleOf } from "./installation.js";
 import { collectDraftView } from "./loop-view.js";
 import { translateFlow, type Lang } from "./translations.js";
+import type { Effort } from "./efforts.js";
 import {
   lastAssistantText,
   latestRun,
+  loopCalls,
   loopResults,
   ownerWait,
   runProgress,
@@ -40,9 +42,13 @@ import type {
 } from "./studio-types.js";
 import { isRecord } from "./validate.js";
 
-export type AuthoringLoop = "loop-authoring" | "role-authoring";
-/** Changing a loop or a role through its authoring loop, or running one of the project's loops. */
-export type Purpose = "authoring" | "run";
+/**
+ * What a conversation is: the owner's conversation in the chat (`chat`), where
+ * the session runs the loop each request is for; running one of the project's
+ * loops (`run`); or, as recorded by an earlier version, changing a loop or a
+ * role through its authoring loop (`authoring`).
+ */
+export type Purpose = "chat" | "run" | "authoring";
 export type Pointer = CanvasPointer;
 export interface Conversation {
   id: string;
@@ -54,6 +60,10 @@ export interface Conversation {
   started_at: string;
   /** What the Studio sent the session for the owner, verbatim. */
   sent: { text: string; at: string }[];
+  /** When the owner last stopped it: until their next message, or a new result of its loops, it stands stopped. */
+  stopped_at?: string;
+  /** How many results its loops had given when it was stopped: one more is a new one, whatever its time. */
+  stopped_results?: number;
 }
 export type ConversationStatus = AuthoringStatus;
 
@@ -85,40 +95,45 @@ const pointing = (pointers: Pointer[]): string =>
     : "";
 
 /**
- * What the owner wants, as `description`: their words, what they pointed at, and
- * the loop or role they were looking at. A role the owner chose to change is
- * changed; the loop on the canvas is what the words change unless they ask for
- * another loop, which the authoring loop's own steps then find or build.
+ * The owner's words as the session receives them when they start a
+ * conversation: as they typed them, and, in brackets, what the Studio shows
+ * them, the loop on the canvas and what they pointed at, which say what "this
+ * loop" or "this step" means. The session runs the loop the request is for.
  */
-export function describeRequest(
-  loop: AuthoringLoop,
-  base: Conversation["base"],
-  text: string,
-  pointers: Pointer[],
-): string {
+export function chatMessage(text: string, pointers: Pointer[], base: Conversation["base"]): string {
   const where = base?.source === "library" ? "from the library" : "of this project";
-  const opening = !base
-    ? ""
-    : loop === "loop-authoring"
-      ? `The owner is looking at the loop \`${base.name}\` (${where}); their words change it, unless they ask for another loop: `
-      : `Change the existing role \`${base.name}\` (${where}): `;
-  return `${opening}${text}${pointing(pointers)}`;
+  const shown = base
+    ? `\n\n[In the Studio: the loop \`${base.name}\` (${where}) is on the canvas]`
+    : "";
+  return `${text}${shown}${pointing(pointers)}`.trim();
 }
 /** The owner's reply as the session receives it, and passes it to the loop: their words and what they pointed at. */
 export const ownerMessage = (text: string, pointers: Pointer[]): string =>
   `${text}${pointing(pointers)}`.trim();
 
-export async function startConversation(
+/**
+ * The owner's conversation in the chat, started by their first message: a
+ * session as the entry role, which runs the loop the request is for (making or
+ * changing a loop or a role, running, trying or publishing one) or answers it.
+ */
+export async function startChat(
   projectRoot: string,
   host: SessionHost,
-  request: { loop: AuthoringLoop; base: Conversation["base"]; text: string; pointers: Pointer[] },
+  request: {
+    text: string;
+    pointers: Pointer[];
+    base: Conversation["base"];
+    effort?: Effort | null;
+  },
 ): Promise<Conversation> {
-  const description = describeRequest(request.loop, request.base, request.text, request.pointers);
   return begin(projectRoot, host, {
-    purpose: "authoring",
-    loop: request.loop,
+    purpose: "chat",
+    loop: "",
     base: request.base,
-    prompt: `Run the ${request.loop} loop with args ${JSON.stringify({ description })}.`,
+    prompt: chatMessage(request.text, request.pointers, request.base),
+    // The owner typed it: their own words, not the Studio's.
+    human: true,
+    effort: request.effort ?? null,
   });
 }
 
@@ -131,6 +146,7 @@ export function runLoop(
   projectRoot: string,
   host: SessionHost,
   loop: string,
+  effort: Effort | null = null,
 ): Promise<Conversation> {
   if (!/^[a-z0-9][a-z0-9-]*$/.test(loop))
     throw new Error("a loop name is lowercase words joined by hyphens");
@@ -140,6 +156,7 @@ export function runLoop(
     base: { name: loop, source: "project" },
     // Every role of the loop sees this message, so it names the loop and nothing else.
     prompt: `Run the ${loop} loop.`,
+    effort,
   });
 }
 
@@ -153,6 +170,7 @@ export function trialLoop(
   host: SessionHost,
   loop: string,
   goal: string,
+  effort: Effort | null = null,
 ): Promise<Conversation> {
   if (!/^[a-z0-9][a-z0-9-]*$/.test(loop))
     throw new Error("a loop name is lowercase words joined by hyphens");
@@ -161,13 +179,23 @@ export function trialLoop(
     loop: "loop-trial",
     base: { name: loop, source: "project" },
     prompt: `Run the loop-trial loop with args ${JSON.stringify({ loop, goal })}.`,
+    effort,
   });
 }
 
 async function begin(
   projectRoot: string,
   host: SessionHost,
-  request: { purpose: Purpose; loop: string; base: Conversation["base"]; prompt: string },
+  request: {
+    purpose: Purpose;
+    loop: string;
+    base: Conversation["base"];
+    prompt: string;
+    /** The owner typed the first message (a chat), rather than the Studio wording an action of theirs. */
+    human?: boolean;
+    /** The reasoning effort its session runs at, as the owner chose it in the chat. */
+    effort: Effort | null;
+  },
 ): Promise<Conversation> {
   const root = path.resolve(projectRoot);
   const id = crypto.randomBytes(4).toString("hex");
@@ -178,8 +206,9 @@ async function begin(
     // The role that runs loops and relays the owner's answers.
     agent: entryRoleOf(root),
     message: prompt,
-    // The Studio's own words, carrying the owner's: never an answer to a review.
-    human: false,
+    // The Studio's own words for an action of the owner's are never an answer to a review.
+    human: request.human ?? false,
+    effort: request.effort,
   });
   const conversation: Conversation = {
     id,
@@ -192,6 +221,44 @@ async function begin(
   };
   writeStore(root, [...readStore(root), conversation]);
   return conversation;
+}
+
+/**
+ * The reasoning effort the owner chose, for a conversation's session before a
+ * message goes to it: one that runs at another takes it first. A session that
+ * cannot change it still gets the message, at the level it has.
+ */
+async function withEffort(host: SessionHost, id: string, effort: Effort | null | undefined) {
+  if (effort === undefined) return;
+  await host.setEffort(id, effort).catch(() => false);
+}
+
+/**
+ * Have a conversation's session run at another reasoning effort now, its turn
+ * under way included. `applied` is false when no session runs it: the level
+ * goes with the message that continues it.
+ */
+export async function setConversationEffort(
+  projectRoot: string,
+  host: SessionHost,
+  id: string,
+  effort: Effort | null,
+): Promise<{ id: string; effort: Effort | null; applied: boolean }> {
+  if (!hasConversation(projectRoot, id)) throw new Error(`no conversation ${id}`);
+  return { id, effort, applied: await host.setEffort(id, effort) };
+}
+
+/** The sessions of the project's conversations: which conversation each is, and whether it works now. */
+export function conversationSessions(
+  projectRoot: string,
+  host: SessionHost,
+): Map<string, { conversation: string; working: boolean }> {
+  return new Map(
+    readStore(path.resolve(projectRoot)).map((conversation) => [
+      conversation.session.session_id,
+      { conversation: conversation.id, working: host.get(conversation.id)?.state === "running" },
+    ]),
+  );
 }
 
 /** Whether this project has that conversation. */
@@ -207,7 +274,13 @@ export function hasConversation(projectRoot: string, id: string): boolean {
 export async function answerConversation(
   projectRoot: string,
   host: SessionHost,
-  request: { id: string; text: string; pointers: Pointer[] },
+  request: {
+    id: string;
+    text: string;
+    pointers: Pointer[];
+    /** The reasoning effort the owner chose in the chat: left out, the session's stays as it is. */
+    effort?: Effort | null;
+  },
 ): Promise<Conversation> {
   const root = path.resolve(projectRoot);
   const conversations = readStore(root);
@@ -215,6 +288,7 @@ export async function answerConversation(
   if (!conversation) throw new Error(`no conversation ${request.id}`);
   const message = ownerMessage(request.text, request.pointers);
   if (!message) throw new Error("the reply is empty");
+  await withEffort(host, conversation.id, request.effort);
   if (!host.send(conversation.id, message, true))
     await host.start({
       key: conversation.id,
@@ -223,6 +297,7 @@ export async function answerConversation(
       message,
       human: true,
       resume: conversation.session.session_id,
+      effort: request.effort ?? null,
     });
   conversation.sent.push({ text: message, at: new Date().toISOString() });
   writeStore(root, conversations);
@@ -345,8 +420,18 @@ export async function stopConversation(
   host: SessionHost,
   id: string,
 ): Promise<void> {
-  if (!hasConversation(projectRoot, id)) throw new Error(`no conversation ${id}`);
+  const root = path.resolve(projectRoot);
+  const conversations = readStore(root);
+  const conversation = conversations.find((entry) => entry.id === id);
+  if (!conversation) throw new Error(`no conversation ${id}`);
+  // The turn and the loop it runs stop (an interrupt ends the session's background work too).
   await host.interrupt(id);
+  // Until the owner's next message it stands stopped, not back at the review its loop last stopped at.
+  conversation.stopped_at = new Date().toISOString();
+  conversation.stopped_results = loopResults(
+    transcriptEntries(transcriptPath(root, conversation.session.session_id)),
+  ).length;
+  writeStore(root, conversations);
 }
 
 /** How each recent conversation stands: working, waiting for the owner (with the note and the draft), or ended. */
@@ -370,8 +455,15 @@ export async function conversationStatuses(
     // A message the loop has not answered yet: sent after its latest result, or before it gave any.
     const sentAt = Date.parse(conversation.sent.at(-1)?.at ?? "") || 0;
     const pending = !latest || (Date.parse(latest.at) || 0) < sentAt;
+    // Stopped by the owner after their last message, with no result since (counted, not timed): it stays stopped.
+    const stoppedAt = Date.parse(conversation.stopped_at ?? "") || 0;
+    const stopped =
+      stoppedAt > 0 &&
+      stoppedAt >= sentAt &&
+      results.length <= (conversation.stopped_results ?? results.length);
     let state: ConversationStatus["state"];
     if (live?.state === "running") state = "running";
+    else if (stopped) state = "stopped";
     // The loop still waits at its review until a new result comes, even when a reply did not reach it.
     else if (ownerWait(last)) state = "waiting";
     else if (!pending && last !== null) state = "done";
@@ -391,7 +483,8 @@ export async function conversationStatuses(
     statuses.push({
       id: conversation.id,
       purpose: conversation.purpose ?? "authoring",
-      loop: conversation.loop,
+      // A chat runs whatever loop each request is for: the one its session ran last.
+      loop: conversation.loop || loopCalls(entries).at(-1)?.loop || "",
       base: conversation.base,
       started_at: conversation.started_at,
       state,
@@ -419,6 +512,7 @@ export async function resumeConversation(
   projectRoot: string,
   host: SessionHost,
   id: string,
+  effort?: Effort | null,
 ): Promise<{ id: string; run: string }> {
   const root = path.resolve(projectRoot);
   const conversations = readStore(root);
@@ -430,7 +524,12 @@ export async function resumeConversation(
   if (!status?.run || !status.resumable)
     throw new Error("this conversation has no loop run that stopped partway");
   // The Studio's words, as when it started the loop: the session resumes the run it names.
-  const message = `Resume the run ${status.run.id} of the ${conversation.loop} loop where it stopped, with the arguments it was started with.`;
+  const transcript = transcriptPath(root, conversation.session.session_id);
+  const loop =
+    loopCalls(transcriptEntries(transcript)).find((call) => call.run === status.run!.id)?.loop ||
+    status.loop;
+  const message = `Resume the run ${status.run.id} of the ${loop} loop where it stopped, with the arguments it was started with.`;
+  await withEffort(host, conversation.id, effort);
   if (!host.send(conversation.id, message, false))
     await host.start({
       key: conversation.id,
@@ -439,6 +538,7 @@ export async function resumeConversation(
       message,
       human: false,
       resume: conversation.session.session_id,
+      effort: effort ?? null,
     });
   conversation.sent.push({ text: message, at: new Date().toISOString() });
   writeStore(root, conversations);

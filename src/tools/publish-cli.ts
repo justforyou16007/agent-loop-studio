@@ -51,7 +51,7 @@ import { writeStateJsonAtomic } from "./state-file.js";
 import { scanForThreats } from "./threat-scan.js";
 import { A1Error, failA1, isRecord } from "./validate.js";
 import { KEY_SHAPES } from "./secrets.js";
-import { shownStrings } from "./loop-view.js";
+import { roleShownStrings, shownStrings } from "./loop-view.js";
 import { TRANSLATED, translationFile } from "./translations.js";
 import { currentEntries, memoryRoles, type MemoryEntry } from "./memory.js";
 import type { PublishedMemory } from "./studio-types.js";
@@ -469,12 +469,18 @@ function leftAsInstalled(
 const UNKNOWN_BASE =
   "this project was installed before baselines were kept, so what it changed cannot be told: install into a fresh project to publish it";
 
-function classifyRole(context: PlanContext, name: string): Classified {
+async function classifyRole(context: PlanContext, name: string): Promise<Classified> {
   const { root, side } = context;
   const source = `.claude/agents/${name}.md`;
   const ours = readText(path.join(rolesDir(root), `${name}.md`)) ?? "";
   const fields = frontmatter(ours);
-  const base = readText(seededFile(root, source));
+  // What the Studio shows of the role, in the languages it is translated into: it travels with the role.
+  const translations = TRANSLATED.flatMap((lang) => {
+    const text = readText(translationFile(path.join(rolesDir(root), `${name}.md`), lang));
+    return text === null
+      ? []
+      : [{ source: `.claude/agents/${name}.${lang}.json`, ours: text, ext: `${lang}.json` }];
+  });
   const unit: Classified = {
     kind: "role",
     name,
@@ -487,15 +493,26 @@ function classifyRole(context: PlanContext, name: string): Classified {
     finals: new Map(),
     before: new Map(),
   };
-  const left = leftAsInstalled(
-    context,
-    source,
-    ours,
-    base,
-    frameworkText(context, "roles", `${name}.md`),
-  );
-  if (left === "yes") return unit;
-  if (left === "unknown") return { ...unit, state: "unknown-base", reason: UNKNOWN_BASE };
+  const lefts = [
+    leftAsInstalled(
+      context,
+      source,
+      ours,
+      readText(seededFile(root, source)),
+      frameworkText(context, "roles", `${name}.md`),
+    ),
+    ...translations.map((translation) =>
+      leftAsInstalled(
+        context,
+        translation.source,
+        translation.ours,
+        readText(seededFile(root, translation.source)),
+        frameworkText(context, "roles", `${name}.${translation.ext}`),
+      ),
+    ),
+  ];
+  if (lefts.every((left) => left === "yes")) return unit;
+  if (lefts.includes("unknown")) return { ...unit, state: "unknown-base", reason: UNKNOWN_BASE };
   const defects = checkRoles(root, [name])[0]?.defects ?? [];
   if (defects.length)
     return {
@@ -509,24 +526,51 @@ function classifyRole(context: PlanContext, name: string): Classified {
       state: "wrong-side",
       reason: `it serves the ${fields.side} side, and this ${side} project receives ${context.sides.join(" and ")}`,
     };
-  const target = `projects/${context.name}/roles/${name}.md`;
-  const theirs = showAtBase(context.community, target);
-  const sent = context.sent.get(target) ?? new Set<string>();
-  let { state, reason } = context.taken
-    ? { state: "conflict" as State, reason: TAKEN(context.name) }
-    : stateAgainstPublished(ours, theirs, sent);
-  if (SENDABLE.includes(state) && sent.has(sha256(ours))) {
-    state = "already-sent";
-    reason = "an earlier publication of this project already carries exactly this";
-  }
-  return {
+  const pairs = [{ source, ours, ext: "md" }, ...translations].map((pair) => {
+    const target = `projects/${context.name}/roles/${name}.${pair.ext}`;
+    const theirs = showAtBase(context.community, target);
+    const sent = context.sent.get(target) ?? new Set<string>();
+    return {
+      ...pair,
+      target,
+      theirs,
+      sent,
+      verdict: stateAgainstPublished(pair.ours, theirs, sent),
+    };
+  });
+  // A role is written in English and shown in the owner's language: one without a whole translation is shown partly in English.
+  const shown = await roleShownStrings(root, name);
+  const whole = {
     ...unit,
-    state,
-    ...(reason ? { reason } : {}),
-    files: [{ source, target, sha256: sha256(ours) }],
-    finals: new Map([[target, ours]]),
-    before: new Map(theirs === null ? [] : [[target, theirs]]),
+    warnings: shown.missing.length
+      ? [
+          `its Chinese translation (${name}.zh.json) lacks ${shown.missing.length} of the ${shown.strings.length} strings the Studio shows of it, which a Chinese page shows in English: loop-check.js strings --role lists them`,
+        ]
+      : [],
+    files: pairs.map((pair) => ({
+      source: pair.source,
+      target: pair.target,
+      sha256: sha256(pair.ours),
+    })),
+    finals: new Map(pairs.map((pair) => [pair.target, pair.ours])),
+    before: new Map(
+      pairs.flatMap((pair) =>
+        pair.theirs === null ? [] : ([[pair.target, pair.theirs]] as [string, string][]),
+      ),
+    ),
   };
+  if (context.taken) return { ...whole, state: "conflict", reason: TAKEN(context.name) };
+  if (pairs.every((pair) => pair.verdict.state === "in-library"))
+    return { ...whole, state: "in-library" };
+  const stuck = pairs.find((pair) => pair.verdict.state === "conflict");
+  if (stuck) return { ...whole, state: "conflict", reason: stuck.verdict.reason! };
+  if (pairs.every((pair) => pair.sent.has(sha256(pair.ours))))
+    return {
+      ...whole,
+      state: "already-sent",
+      reason: "an earlier publication of this project already carries exactly this",
+    };
+  return { ...whole, state: pairs[0]!.theirs === null ? "new" : "changed" };
 }
 /**
  * One entry of a role's memory, a unit of its own (`<role>/<id>`): the owner
@@ -737,7 +781,7 @@ function writeFinals(dir: string, units: Classified[]): void {
 export async function checkLibrary(
   library: string,
   manifest?: ProjectManifest,
-  /** The framework's own library: every loop has a whole translation of what the Studio shows of it. */
+  /** The framework's own library: every loop and role has a whole translation of what the Studio shows of it. */
   options: { translations?: boolean } = {},
 ): Promise<{
   ok: boolean;
@@ -785,6 +829,8 @@ export async function checkLibrary(
         [`loops/${side}`, "workflows", ".js"],
         ["loops/framework", "loops", ".zh.json"],
         [`loops/${side}`, "loops", ".zh.json"],
+        ["roles/framework", "agents", ".zh.json"],
+        [`roles/${side}`, "agents", ".zh.json"],
       ] as const) {
         const source = path.join(library, from);
         fs.mkdirSync(path.join(project, ".claude", to), { recursive: true });
@@ -828,6 +874,13 @@ export async function checkLibrary(
         const declared = declaredSide(path.join(rolesDir(project), file));
         if ([...sides, "framework"].includes(declared ?? "") && declared !== directory)
           report.defects.push(`it declares side ${declared}, but lives under ${directory}`);
+        if (options.translations) {
+          const { missing } = await roleShownStrings(project, report.role);
+          if (missing.length)
+            report.defects.push(
+              `its Chinese translation (${report.role}.zh.json) lacks ${missing.length} of the strings the Studio shows of it, such as: ${missing.slice(0, 3).join(" | ").slice(0, 300)}`,
+            );
+        }
         report.ok = !report.defects.length;
       }
       reports[side] = { check, roles };
@@ -1082,7 +1135,7 @@ async function computePlan(
   const roles = rolesDir(root);
   if (fs.existsSync(roles))
     for (const file of fs.readdirSync(roles).sort())
-      if (file.endsWith(".md")) units.push(classifyRole(context, file.slice(0, -3)));
+      if (file.endsWith(".md")) units.push(await classifyRole(context, file.slice(0, -3)));
   for (const loop of listLoops(root)) units.push(await classifyLoop(context, loop));
   for (const { role } of memoryRoles(root))
     for (const entry of currentEntries(root, role))
@@ -1149,7 +1202,14 @@ async function computePlan(
         unit.kind === "memory"
           ? unit.files.map((file) => file.target)
           : unit.kind === "role"
-            ? [`${dir}/roles/${unit.name}.md`]
+            ? [
+                `${dir}/roles/${unit.name}.md`,
+                ...TRANSLATED.map((lang) => `${dir}/roles/${unit.name}.${lang}.json`).filter(
+                  (target) =>
+                    !MIRRORED.includes(unit.state) ||
+                    unit.files.some((file) => file.target === target),
+                ),
+              ]
             : [
                 `${dir}/loops/${unit.name}.md`,
                 `${dir}/loops/${unit.name}.js`,

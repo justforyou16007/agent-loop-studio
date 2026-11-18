@@ -85,6 +85,71 @@ export function loopResults(entries: TranscriptEntry[]): LoopResult[] {
   return results;
 }
 
+/** A text of a message's content: a string, or its text parts. */
+const contentText = (content: unknown): string =>
+  typeof content === "string"
+    ? content
+    : Array.isArray(content)
+      ? content
+          .map((part) => (isRecord(part) && typeof part.text === "string" ? part.text : ""))
+          .join("")
+      : "";
+
+/** A loop a session ran: the Workflow call, the run it started, and how that run ended. */
+export interface LoopCall {
+  /** The Workflow tool call's id, which its notification names. */
+  call: string;
+  loop: string;
+  /** The run it started (`wf_…`), once Claude Code said which. */
+  run: string | null;
+  /** When the session called it. */
+  at: string;
+  /** Its notification: how it ended and what it returned; null while it runs, or when nothing said it ended. */
+  ended: { at: string; status: string; result: unknown } | null;
+}
+/** Every loop a session ran, oldest first, each with the run it started and how that ended. */
+export function loopCalls(entries: TranscriptEntry[]): LoopCall[] {
+  const calls = new Map<string, LoopCall>();
+  for (const entry of entries) {
+    const message = isRecord(entry.message) ? entry.message : {};
+    const content = Array.isArray(message.content) ? message.content : [];
+    const at = typeof entry.timestamp === "string" ? entry.timestamp : "";
+    if (entry.type === "assistant")
+      for (const part of content)
+        if (isRecord(part) && part.type === "tool_use" && part.name === "Workflow") {
+          const input = isRecord(part.input) ? part.input : {};
+          calls.set(String(part.id), {
+            call: String(part.id),
+            loop: typeof input.name === "string" ? input.name : "",
+            run: null,
+            at,
+            ended: null,
+          });
+        }
+    if (entry.type !== "user") continue;
+    for (const part of content)
+      if (isRecord(part) && part.type === "tool_result" && calls.has(String(part.tool_use_id))) {
+        const result = isRecord(entry.toolUseResult) ? entry.toolUseResult : {};
+        calls.get(String(part.tool_use_id))!.run =
+          typeof result.runId === "string"
+            ? result.runId
+            : (/\bwf_[A-Za-z0-9_-]+/.exec(contentText(part.content))?.[0] ?? null);
+      }
+    const origin = isRecord(entry.origin) ? entry.origin : {};
+    if (origin.kind !== "task-notification") continue;
+    const said = textOf(entry);
+    const call = calls.get(/<tool-use-id>([^<]+)<\/tool-use-id>/.exec(said)?.[1] ?? "");
+    if (!call) continue;
+    const result = /<result>([\s\S]*?)<\/result>/.exec(said)?.[1];
+    call.ended = {
+      at,
+      status: /<status>([^<]+)<\/status>/.exec(said)?.[1]?.trim() ?? "",
+      result: result === undefined ? null : (jsonIn(result) ?? result.trim()),
+    };
+  }
+  return [...calls.values()];
+}
+
 export interface OwnerWait {
   review_id: string;
   question: string;
